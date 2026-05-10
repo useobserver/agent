@@ -16,7 +16,10 @@
 # Final image target: ~40MB on linux/amd64.
 
 # Build stage — alpine for fast install + lockfile prep.
-FROM oven/bun:1-alpine AS builder
+# Pinned to 1.3.6 to match the bun version that wrote bun.lock at the
+# repo root. Newer 1.3.x are stricter about lockfile compatibility and
+# reject "no changes detected by older bun" lockfiles in --frozen mode.
+FROM oven/bun:1.3.6-alpine AS builder
 WORKDIR /repo
 
 # Workspace skeleton first so install layer caches across source edits.
@@ -32,8 +35,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 COPY apps/agent ./apps/agent
 
 # Runtime stage — distroless has no shell, no package manager, only the
-# bun binary + libc dependencies. Smallest possible image.
-FROM oven/bun:1-distroless
+# bun binary + libc dependencies. Smallest possible image. Pinned to
+# match builder.
+FROM oven/bun:1.3.6-distroless
 
 WORKDIR /app
 
