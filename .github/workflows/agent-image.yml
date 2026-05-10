@@ -1,0 +1,120 @@
+name: Build + push agent image to GHCR
+
+# Public mirror image build. Source comes from the monorepo's
+# tools/mirror-agent/mirror.sh — never edit this file in the public
+# repo directly. Update tools/mirror-agent/templates/agent-image.yml
+# in the monorepo and re-run mirror.sh push.
+#
+# Triggers:
+#   - push to main (from the mirror)
+#   - tags matching agent-v* (mirror forwards the version tag)
+#   - manual workflow_dispatch
+#
+# Image: ghcr.io/<owner>/agent — owner is the public repo owner
+# (useobserver). Tags emitted: latest (main), <branch>, sha-<short>,
+# semver / major.minor / major (on agent-v* tag pushes).
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "agent-v*"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push image to GHCR (false = build only)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  # Public package name — single segment under the org so consumers
+  # pull `ghcr.io/useobserver/agent:<tag>`.
+  IMAGE_NAME: agent
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image owner
+        id: owner
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          echo "value=${OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve push flag
+        id: push
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.push }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to GHCR
+        if: steps.push.outputs.value == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=match,pattern=agent-v(\d+\.\d+\.\d+),group=1
+            type=match,pattern=agent-v(\d+\.\d+),group=1
+            type=match,pattern=agent-v(\d+),group=1
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Observer Agent
+            org.opencontainers.image.description=Probes metric sources, pushes results to Observer Cloud.
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=ISC
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.push.outputs.value == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=agent
+          cache-to: type=gha,mode=max,scope=agent
+          provenance: false
+          sbom: false
+
+      - name: Summarise image
+        run: |
+          {
+            echo "### Observer agent image"
+            echo
+            echo "Repository: \`${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/${{ env.IMAGE_NAME }}\`"
+            echo
+            echo "Pushed: \`${{ steps.push.outputs.value }}\`"
+            echo
+            echo "Tags:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
