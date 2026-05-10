@@ -32,7 +32,6 @@ COPY package.json bun.lock* ./
 COPY apps/agent/package.json ./apps/agent/
 COPY apps/web/package.json ./apps/web/
 COPY apps/docs/package.json ./apps/docs/
-COPY apps/ingestion/package.json ./apps/ingestion/
 COPY packages ./packages
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
