@@ -1,6 +1,7 @@
 // agent/index.ts — Bun runtime entry point.
 
 import crypto from "node:crypto";
+import pkg from "../package.json" with { type: "json" };
 import buffer from "./buffer.ts";
 import { createDrainController } from "./drain.ts";
 import { startDashboard, maskEnv } from "./dashboard.ts";
@@ -60,7 +61,11 @@ if (!AGENT_KEY) {
   process.exit(1);
 }
 
-const AGENT_VERSION = "1.0.0";
+// Single source of truth: apps/agent/package.json. Bumping the package
+// version + pushing an `agent-v<semver>` tag both stamps the GHCR image
+// AND propagates the new version to every heartbeat → agents.version
+// → dashboard.
+const AGENT_VERSION = (pkg as { version: string }).version;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const AGENT_STARTED_AT = new Date().toISOString();
 const activeSourceTypes = new Set<string>();
