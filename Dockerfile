@@ -34,8 +34,12 @@ COPY apps/web/package.json ./apps/web/
 COPY apps/docs/package.json ./apps/docs/
 COPY packages ./packages
 
+# --ignore-scripts: apps/docs has a postinstall (Fumadocs MDX
+# generation) that needs source.config.ts and the full docs source
+# tree — we don't ship that into the agent image, so skip postinstalls
+# project-wide. Agent + its workspace deps don't run postinstall.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile
+    bun install --frozen-lockfile --ignore-scripts
 
 # Copy agent source after deps so a code edit doesn't bust the install layer.
 COPY apps/agent ./apps/agent
