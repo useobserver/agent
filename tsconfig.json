@@ -1,0 +1,5 @@
+{
+  "extends": "@observer/tsconfig/bun.json",
+  "include": ["src/**/*.ts"],
+  "exclude": ["example", "node_modules", "tests"]
+}

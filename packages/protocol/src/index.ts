@@ -1,0 +1,34 @@
+// @observer/protocol — public API.
+//
+// Single source of truth for the cloud↔agent wire contract:
+//   - Heartbeat shape + health alert state machine
+//   - Push payload + status verdict types
+//   - Metric definition projection
+//
+// Zero runtime dependencies; types + pure functions only. Safe to
+// publish to npm for the public agent mirror.
+
+export type { HeartbeatPayload, HealthAlertState } from "./heartbeat";
+export {
+  LAG_QUEUE_DEPTH_THRESHOLD,
+  LAG_OLDEST_AGE_SECONDS_THRESHOLD,
+  UPTIME_PCT_THRESHOLD,
+  CLEAR_HYSTERESIS_MS,
+} from "./heartbeat";
+
+export type {
+  ProbeStatus,
+  Operation,
+  ProbeResult,
+  ProbeSource,
+  MetricSamplePayload,
+} from "./push";
+
+export type { SourceType, MetricDefinition } from "./definition";
+
+export {
+  classifyLagSignal,
+  classifyUptimeSignal,
+  transition,
+  uptimeSecondsToPct,
+} from "./agent-health";

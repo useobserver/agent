@@ -1,0 +1,20 @@
+{
+  "name": "@observer/probe-config",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 21 probe-type Zod schemas + write validator. Shared by cloud (apps/web) and agent (apps/agent).",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@observer/tsconfig": "workspace:*"
+  }
+}

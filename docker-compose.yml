@@ -1,0 +1,25 @@
+# docker-compose.yml — local Observer agent.
+#
+# Build context shifted to the monorepo root (../../) in Phase 23-E
+# because the agent now depends on workspace packages
+# (@observer/protocol, @observer/probe-config). Run from this dir:
+#
+#   docker compose up --build
+#
+# Phase 22 TS+Bun migration: distroless has no shell, so the
+# /healthcheck.sh probe is gone. Liveness via container exit + restart.
+#
+# Dashboard: ENABLE_DEBUG_DASHBOARD defaults true in the image; visit
+# http://localhost:10101 to inspect runtime state.
+
+services:
+  metrics-agent:
+    build:
+      context: ../..
+      dockerfile: apps/agent/Dockerfile
+    container_name: observer-agent
+    env_file:
+      - .env
+    ports:
+      - "10101:10101"
+    restart: unless-stopped
