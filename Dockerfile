@@ -23,13 +23,20 @@ FROM oven/bun:1.3.6-alpine AS builder
 WORKDIR /repo
 
 # Workspace skeleton first so install layer caches across source edits.
+# Bun resolves workspace deps from the manifests of EVERY workspace
+# member (`workspaces: ["apps/*", "packages/*"]` at the root). If we
+# only stage apps/agent/package.json, bun sees the lockfile as out of
+# sync with the apps tree and refuses --frozen-lockfile. Copy every
+# workspace manifest so the resolver sees a complete picture.
 COPY package.json bun.lock* ./
 COPY apps/agent/package.json ./apps/agent/
+COPY apps/web/package.json ./apps/web/
+COPY apps/docs/package.json ./apps/docs/
+COPY apps/ingestion/package.json ./apps/ingestion/
 COPY packages ./packages
 
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --production --frozen-lockfile || \
-    bun install --production
+    bun install --frozen-lockfile
 
 # Copy agent source after deps so a code edit doesn't bust the install layer.
 COPY apps/agent ./apps/agent
