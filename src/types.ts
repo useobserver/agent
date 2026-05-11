@@ -68,6 +68,14 @@ export interface DashboardSnapshot {
     memory_rss_mb: number;
     version: string;
     bun_version: string;
+    pid: number;
+    hostname: string;
+  };
+  counters: {
+    evaluations: number;
+    pushes: number;
+    errors: number;
+    dropped: number;
   };
   config: Record<string, string>;
   queue: {
@@ -99,6 +107,15 @@ export interface DashboardSnapshot {
     last_value: number | null;
     last_at: string | null;
     last_reason: string | null;
+    healthy_operation: string | null;
+    healthy_value: number | null;
+    unhealthy_operation: string | null;
+    unhealthy_value: number | null;
   }>;
   active_source_types: string[];
+  recent_logs: Array<{
+    timestamp: string;
+    level: string;
+    message: string;
+  }>;
 }

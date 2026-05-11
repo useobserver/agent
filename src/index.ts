@@ -1,6 +1,7 @@
 // agent/index.ts — Bun runtime entry point.
 
 import crypto from "node:crypto";
+import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
 import buffer from "./buffer.ts";
 import { createDrainController } from "./drain.ts";
@@ -83,6 +84,10 @@ interface DefinitionState {
   last_value: number | null;
   last_at: string | null;
   last_reason: string | null;
+  healthy_operation: string | null;
+  healthy_value: number | null;
+  unhealthy_operation: string | null;
+  unhealthy_value: number | null;
 }
 
 const definitionState = new Map<string, DefinitionState>();
@@ -95,6 +100,28 @@ let lastPostError: string | null = null;
 let lastPromProbeAt: string | null = null;
 let lastPromProbeOutcome: "success" | "no_data" | "error" | null = null;
 
+// Counters — cumulative since process start. Dashboard renders the
+// snapshot; long-window aggregation (24h "errors") is the cloud's job.
+const counters = {
+  evaluations: 0,
+  pushes: 0,
+  errors: 0,
+  dropped: 0,
+};
+
+// Ring buffer of recent log lines for the dashboard's log pane.
+// Capped to keep memory bounded and stay aligned with the dashboard's
+// "last N" pane size.
+const RECENT_LOGS_CAP = 50;
+const recentLogs: Array<{ timestamp: string; level: string; message: string }> = [];
+
+function pushRecentLog(level: string, message: string): void {
+  recentLogs.push({ timestamp: new Date().toISOString(), level, message });
+  if (recentLogs.length > RECENT_LOGS_CAP) {
+    recentLogs.splice(0, recentLogs.length - RECENT_LOGS_CAP);
+  }
+}
+
 function getSnapshot(): DashboardSnapshot {
   return {
     process: {
@@ -103,7 +130,10 @@ function getSnapshot(): DashboardSnapshot {
       memory_rss_mb: process.memoryUsage().rss / 1_048_576,
       version: AGENT_VERSION,
       bun_version: typeof Bun !== "undefined" ? Bun.version : "unknown",
+      pid: process.pid,
+      hostname: os.hostname(),
     },
+    counters: { ...counters },
     config: maskEnv(process.env),
     queue: {
       depth: buffer.size(),
@@ -127,6 +157,7 @@ function getSnapshot(): DashboardSnapshot {
     },
     definitions: Array.from(definitionState.entries()).map(([id, s]) => ({ id, ...s })),
     active_source_types: [...activeSourceTypes],
+    recent_logs: recentLogs.slice(-20),
   };
 }
 
@@ -137,6 +168,7 @@ function formatLogMessage(level: string, message: string): string {
 }
 
 const log = async (level: string, message: string): Promise<void> => {
+  pushRecentLog(level, message);
   if (level === "ERROR") {
     console.error(formatLogMessage(level, message));
   } else {
@@ -162,6 +194,7 @@ async function sendLog(level: string, message: string): Promise<void> {
 }
 
 function handleError(message: string, error: unknown): void {
+  counters.errors += 1;
   log("ERROR", message);
   if (isVerbose && error instanceof Error && error.stack) console.error(error.stack);
 }
@@ -231,6 +264,7 @@ const postOneToCloud = async (metricData: MetricSamplePayload): Promise<unknown>
       method: "POST",
       body: JSON.stringify(metricData),
     });
+    counters.pushes += 1;
     lastPostAt = new Date().toISOString();
     lastPostOk = true;
     lastPostError = null;
@@ -246,6 +280,7 @@ const postOneToCloud = async (metricData: MetricSamplePayload): Promise<unknown>
 const sendMetricsToCloudServer = (metricData: MetricSamplePayload): void => {
   const { size, dropped } = buffer.enqueue(metricData);
   if (dropped > 0) {
+    counters.dropped += dropped;
     log("ERROR", `Queue cap reached: dropped ${dropped} oldest rows. Cap=${buffer.MAX_ROWS}. Depth=${size}.`);
   }
 };
@@ -367,6 +402,12 @@ const startMetricPolling = async (): Promise<void> => {
         } = definition;
 
         seenIds.add(id);
+        const thresholdFields = {
+          healthy_operation: (healthy_operation as string) ?? null,
+          healthy_value: healthy_value != null ? Number(healthy_value) : null,
+          unhealthy_operation: (unhealthy_operation as string) ?? null,
+          unhealthy_value: unhealthy_value != null ? Number(unhealthy_value) : null,
+        };
         if (!definitionState.has(id)) {
           definitionState.set(id, {
             source_type: definition.source_type ?? "prometheus",
@@ -376,12 +417,17 @@ const startMetricPolling = async (): Promise<void> => {
             last_value: null,
             last_at: null,
             last_reason: null,
+            ...thresholdFields,
           });
         } else {
           const s = definitionState.get(id)!;
           s.source_type = definition.source_type ?? "prometheus";
           s.interval_minutes = interval;
           s.push_interval_minutes = interval_agent_push;
+          s.healthy_operation = thresholdFields.healthy_operation;
+          s.healthy_value = thresholdFields.healthy_value;
+          s.unhealthy_operation = thresholdFields.unhealthy_operation;
+          s.unhealthy_value = thresholdFields.unhealthy_value;
         }
 
         let lastStatus: string | null = null;
@@ -402,6 +448,7 @@ const startMetricPolling = async (): Promise<void> => {
         };
 
         const pollingJob = scheduleEvery(interval, async () => {
+          counters.evaluations += 1;
           log("INFO", `Fetching metric: ${label}`);
           try {
             const result = await runProbe();
