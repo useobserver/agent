@@ -1,13 +1,15 @@
 {
   "name": "observer-agent",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Observer agent: probes metric sources, pushes results to Observer Cloud.",
   "main": "src/index.ts",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
     "test": "bun test",
-    "typecheck": "bun --bun tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun --bun tsc --noEmit -p tsconfig.json",
+    "build:binary": "bun run scripts/build-binary.mjs",
+    "build:binaries": "bun run scripts/build-binary.mjs --all"
   },
   "engines": {
     "bun": ">=1.0.0"
