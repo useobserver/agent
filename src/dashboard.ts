@@ -201,7 +201,8 @@ const HTML = `<!doctype html>
       padding: 12px 14px;
       margin: 18px;
       font-size: 12px; line-height: 1.6;
-      max-height: 220px; overflow: auto;
+      overflow: auto; resize: vertical;
+      min-height: 50px; max-height: 500px;
     }
     .log .line { display: grid; grid-template-columns: 90px 60px 1fr; gap: 12px; }
     .log .t { color: var(--ink-3); }
@@ -507,7 +508,8 @@ export interface DashboardServer {
 
 export function startDashboard(opts: DashboardOptions): DashboardServer {
   const port = opts.port ?? Number(process.env.DEBUG_DASHBOARD_PORT) ?? 10101;
-  const hostname = opts.hostname ?? process.env.DEBUG_DASHBOARD_HOST ?? "0.0.0.0";
+  const hostname =
+    opts.hostname ?? process.env.DEBUG_DASHBOARD_HOST ?? "0.0.0.0";
 
   const server = Bun.serve({
     port,
@@ -516,17 +518,25 @@ export function startDashboard(opts: DashboardOptions): DashboardServer {
       const url = new URL(req.url);
       if (url.pathname === "/" || url.pathname === "/index.html") {
         return new Response(HTML, {
-          headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
         });
       }
       if (url.pathname === "/api/state") {
         const snap = opts.state.getSnapshot();
         return new Response(JSON.stringify(snap), {
-          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+          },
         });
       }
       if (url.pathname === "/healthz") {
-        return new Response("ok", { headers: { "Content-Type": "text/plain" } });
+        return new Response("ok", {
+          headers: { "Content-Type": "text/plain" },
+        });
       }
       return new Response("Not Found", { status: 404 });
     },

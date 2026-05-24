@@ -13,6 +13,15 @@ export {
   WebsocketConfigSchema,
   MtlsHttpConfigSchema,
   DatabaseConfigSchema,
+  OtlpConfigSchema,
+  OTLP_AGGREGATION_VALUES,
+  CloudwatchConfigSchema,
+  CLOUDWATCH_STATISTIC_VALUES,
+  CLOUDWATCH_PERIOD_VALUES,
+  ManualConfigSchema,
+  CustomConfigSchema,
+  LokiConfigSchema,
+  EsConfigSchema,
 } from "./schemas";
 
 export type {
@@ -26,6 +35,12 @@ export type {
   WebsocketConfig,
   MtlsHttpConfig,
   DatabaseConfig,
+  OtlpConfig,
+  CloudwatchConfig,
+  ManualConfig,
+  CustomConfig,
+  LokiConfig,
+  EsConfig,
 } from "./schemas";
 
 export {
@@ -34,3 +49,11 @@ export {
   type ProbeWriteValues,
   type ProbeWriteResult,
 } from "./validate";
+
+export {
+  extractByJsonPath,
+  parseAndExtract,
+  type ExtractError,
+  type ExtractResult,
+  type ExtractFailure,
+} from "./json-path";

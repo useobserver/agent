@@ -11,7 +11,12 @@ export type SourceType =
   | "grpc"
   | "websocket"
   | "mtls_http"
-  | "database";
+  | "database"
+  | "otlp"
+  | "cloudwatch"
+  | "custom"
+  | "loki"
+  | "elasticsearch";
 
 export interface MetricDefinition {
   id: string;

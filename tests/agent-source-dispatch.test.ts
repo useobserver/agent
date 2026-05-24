@@ -39,22 +39,14 @@ describe("dispatch", () => {
     expect(r.metadata?.error).toBeTruthy();
   });
 
-  it("stubs return reason='not_implemented' (icmp / grpc / websocket / mtls_http / database)", async () => {
-    const stubs = [
-      { source_type: "icmp", source_config: { host: "x" } },
-      { source_type: "grpc", source_config: { host: "x", port: 50051 } },
-      { source_type: "websocket", source_config: { url: "wss://example.test" } },
-      {
-        source_type: "mtls_http",
-        source_config: { url: "https://example.test", client_cert_ref: "secret/cert", client_key_ref: "secret/key" },
-      },
-      { source_type: "database", source_config: { kind: "postgres", connection_string_ref: "secret/db" } },
-    ];
-    for (const def of stubs) {
-      const r = await sources.execute({ id: "m1", ...def });
-      expect(r.status_hint).toBe("no_data");
-      expect(r.reason).toBe("not_implemented");
-    }
+  it("every enumerated runtime ships; custom routes through validateConfig", async () => {
+    // database, mtls_http (delegates to http), icmp
+    //, websocket, grpc, and custom
+    // all dispatch. A custom row with no probe_name fails validation
+    // (invalid_config) rather than falling through to unknown_source_type.
+    const r = await sources.execute({ id: "m1", source_type: "custom", source_config: {} });
+    expect(r.status_hint).toBe("no_data");
+    expect(r.reason).toBe("invalid_config");
   });
 
   it("legacy fallback: prometheus row with top-level query but empty source_config still routes", async () => {

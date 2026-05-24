@@ -16,6 +16,12 @@ import {
   WebsocketConfigSchema,
   MtlsHttpConfigSchema,
   DatabaseConfigSchema,
+  OtlpConfigSchema,
+  CloudwatchConfigSchema,
+  ManualConfigSchema,
+  CustomConfigSchema,
+  LokiConfigSchema,
+  EsConfigSchema,
 } from "./schemas";
 import { PROBE_TYPES, type ProbeType } from "./probe-types";
 
@@ -30,6 +36,12 @@ const SCHEMAS: Record<ProbeType, ZodTypeAny> = {
   websocket: WebsocketConfigSchema,
   mtls_http: MtlsHttpConfigSchema,
   database: DatabaseConfigSchema,
+  otlp: OtlpConfigSchema,
+  cloudwatch: CloudwatchConfigSchema,
+  manual: ManualConfigSchema,
+  custom: CustomConfigSchema,
+  loki: LokiConfigSchema,
+  elasticsearch: EsConfigSchema,
 };
 
 // Returns the Zod schema for a given source_type, or undefined if the

@@ -8,7 +8,7 @@
 // Zero runtime dependencies; types + pure functions only. Safe to
 // publish to npm for the public agent mirror.
 
-export type { HeartbeatPayload, HealthAlertState } from "./heartbeat";
+export type { HeartbeatPayload, HealthAlertState, OtlpReceiverStatsSnapshot, CustomProbeDescriptor } from "./heartbeat";
 export {
   LAG_QUEUE_DEPTH_THRESHOLD,
   LAG_OLDEST_AGE_SECONDS_THRESHOLD,
@@ -23,6 +23,9 @@ export type {
   ProbeSource,
   MetricSamplePayload,
 } from "./push";
+
+export type { Source, SourceInstance, SourceMode } from "./source";
+export { asPullSource } from "./source";
 
 export type { SourceType, MetricDefinition } from "./definition";
 

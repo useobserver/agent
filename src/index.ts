@@ -6,7 +6,9 @@ import pkg from "../package.json" with { type: "json" };
 import buffer from "./buffer.ts";
 import { createDrainController } from "./drain.ts";
 import { startDashboard, maskEnv } from "./dashboard.ts";
+import { getOtlpReceiver } from "./sources/otlp/receiver.ts";
 import sources from "./sources/index.ts";
+import { describeCustomProbes } from "./sources/custom/registry.ts";
 import { evaluateStatus } from "./status.ts";
 import type {
   DashboardSnapshot,
@@ -62,7 +64,7 @@ if (!AGENT_KEY) {
   process.exit(1);
 }
 
-// Single source of truth: apps/agent/package.json. Bumping the package
+// Single source of truth: the agent's package.json. Bumping the package
 // version + pushing an `agent-v<semver>` tag both stamps the GHCR image
 // AND propagates the new version to every heartbeat → agents.version
 // → dashboard.
@@ -308,6 +310,18 @@ const startDrainLoop = (): void => {
 // ───────────────────────── Heartbeat ─────────────────────────────────
 
 const sendHeartbeat = async (): Promise<void> => {
+  // OTLP receiver is lazy-started; getOtlpReceiver() returns null
+  // before the first OTLP source has been dispatched. We omit
+  // otlp_stats entirely in that case so the cloud row stays null
+  // and the dashboard doesn't render a misleading "0 dropped" cell
+  // for agents that never run the receiver.
+  const otlpReceiver = getOtlpReceiver();
+  const otlpStats = otlpReceiver ? otlpReceiver.stats() : undefined;
+  // Custom probes registered at boot. Always send the field (even when
+  // empty) so that removing a probe + redeploying CLEARS the stale list
+  // on the cloud. Older agents omit the field
+  // entirely, so the cloud leaves their column untouched.
+  const customProbes = describeCustomProbes();
   const payload: HeartbeatPayload = {
     version: AGENT_VERSION,
     uptime_seconds: Math.floor(process.uptime()),
@@ -318,6 +332,8 @@ const sendHeartbeat = async (): Promise<void> => {
     queue_capacity: buffer.MAX_ROWS,
     agent_started_at: AGENT_STARTED_AT,
     source_types_active: [...activeSourceTypes],
+    ...(otlpStats ? { otlp_stats: otlpStats } : {}),
+    custom_probes: customProbes,
   };
   try {
     await cloudFetch("/api/agent/heartbeat", { method: "POST", body: JSON.stringify(payload) });
@@ -335,6 +351,88 @@ const sendHeartbeat = async (): Promise<void> => {
 const startHeartbeatLoop = (): void => {
   sendHeartbeat();
   setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+};
+
+// ───────────────────── CloudWatch ListMetrics poller ────────
+//
+// The cloud queues operator-initiated `cloudwatch:ListMetrics`
+// requests (from the metric edit form) into `cloudwatch_list_requests`.
+// The cloud has no AWS creds; the agent does. This poller fetches
+// pending work via Agent-Key, runs ListMetrics against the same
+// CloudWatch client cache used at probe time, and posts the result
+// back. Disabled when there are no OTLP / CloudWatch sources active —
+// no point polling if nothing's pending.
+
+const CLOUDWATCH_WORK_POLL_INTERVAL_MS = 5_000;
+let cloudwatchWorkPollerStarted = false;
+
+interface CloudwatchWorkItem {
+  correlation_id: string;
+  region: string;
+  namespace: string | null;
+  role_arn: string | null;
+  external_id: string | null;
+}
+
+async function processCloudwatchWorkItem(item: CloudwatchWorkItem): Promise<void> {
+  const cloudwatch = await import("./sources/cloudwatch.ts");
+  const result = await cloudwatch.listMetrics({
+    region: item.region,
+    namespace: item.namespace ?? undefined,
+    role_arn: item.role_arn ?? undefined,
+    external_id: item.external_id ?? undefined,
+  });
+  const body = result.ok
+    ? { ok: true, metrics: result.metrics.map((m) => ({ metric_name: m.metric_name, dimensions: m.dimensions })) }
+    : { ok: false, reason: result.reason, detail: result.detail };
+  await cloudFetch(`/api/agent/work/cloudwatch-list-metrics/${item.correlation_id}/result`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+async function pollCloudwatchWork(): Promise<void> {
+  try {
+    const res = await cloudFetch("/api/agent/work/cloudwatch-list-metrics", { method: "GET" });
+    const data = (await res.json()) as { work?: CloudwatchWorkItem[] };
+    const work = data?.work ?? [];
+    if (work.length === 0) return;
+    // Run items in parallel; each item already has its own CloudWatch
+    // client from the cache, and the cap-of-5 batch size limits
+    // simultaneous AWS calls.
+    await Promise.allSettled(
+      work.map(async (item) => {
+        try {
+          await processCloudwatchWorkItem(item);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log("WARN", `CloudWatch list work ${item.correlation_id} failed: ${msg}`);
+          // Best-effort error post so the form doesn't hang.
+          try {
+            await cloudFetch(`/api/agent/work/cloudwatch-list-metrics/${item.correlation_id}/result`, {
+              method: "POST",
+              body: JSON.stringify({ ok: false, reason: "agent_error", detail: msg.slice(0, 256) }),
+            });
+          } catch {
+            /* swallow — work item will be reclaimed via stale-claim cleanup */
+          }
+        }
+      }),
+    );
+  } catch (error) {
+    // Don't loud-log if the cloud is briefly unreachable; the next
+    // tick retries. Verbose-mode users see the warning.
+    if (isVerbose) {
+      const msg = error instanceof Error ? error.message : String(error);
+      log("WARN", `CloudWatch work poll failed: ${msg}`);
+    }
+  }
+}
+
+const startCloudwatchWorkPoller = (): void => {
+  if (cloudwatchWorkPollerStarted) return;
+  cloudwatchWorkPollerStarted = true;
+  setInterval(pollCloudwatchWork, CLOUDWATCH_WORK_POLL_INTERVAL_MS);
 };
 
 // ───────────────────────── Probe scheduling ──────────────────────────
@@ -535,9 +633,18 @@ const startMetricPolling = async (): Promise<void> => {
         scheduledJobs.set(`${id}-push`, pushJob);
       }
 
-      // Drop definitions that disappeared from the cloud.
+      // Drop definitions that disappeared from the cloud, and dispose
+      // any push-mode SourceInstance they held (OTLP subscription,
+      // future receivers). Best-effort: dispose failures are logged
+      // but never block the polling tick.
       for (const id of [...definitionState.keys()]) {
-        if (!seenIds.has(id)) definitionState.delete(id);
+        if (!seenIds.has(id)) {
+          definitionState.delete(id);
+          sources.disposeForMetric(id).catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            log("WARN", `dispose push source for ${id} failed: ${msg}`);
+          });
+        }
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -556,6 +663,7 @@ const startMetricPolling = async (): Promise<void> => {
 
 startDrainLoop();
 startHeartbeatLoop();
+startCloudwatchWorkPoller();
 
 if (ENABLE_DEBUG_DASHBOARD !== "false") {
   try {
@@ -574,8 +682,14 @@ startMetricPolling().catch((error: unknown) => {
   handleError("Error initializing metric polling: " + msg, error);
 });
 
-function shutdown(signal: string): void {
-  log("INFO", `Received ${signal}; closing buffer and exiting.`);
+async function shutdown(signal: string): Promise<void> {
+  log("INFO", `Received ${signal}; disposing push sources, closing buffer, exiting.`);
+  try {
+    await sources.disposeAllPushInstances();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log("WARN", `dispose push instances on shutdown failed: ${msg}`);
+  }
   try {
     buffer.close();
   } catch {
@@ -583,5 +697,9 @@ function shutdown(signal: string): void {
   }
   process.exit(0);
 }
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => {
+  shutdown("SIGINT").catch(() => process.exit(1));
+});
+process.on("SIGTERM", () => {
+  shutdown("SIGTERM").catch(() => process.exit(1));
+});

@@ -13,6 +13,12 @@ export const PROBE_TYPES = Object.freeze([
   "websocket",
   "mtls_http",
   "database",
+  "otlp",
+  "cloudwatch",
+  "custom",
+  "loki",
+  "elasticsearch",
+  "manual",
 ] as const);
 
 export type ProbeType = (typeof PROBE_TYPES)[number];

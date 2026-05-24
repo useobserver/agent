@@ -4,6 +4,29 @@
 // derives uptime/restart counts and runs the alert state machine
 // defined in ./agent-health.
 
+export interface OtlpReceiverStatsSnapshot {
+  running: boolean;
+  listen_addr: string | null;
+  bearer_required: boolean;
+  data_points_received: number;
+  data_points_dropped: number;
+  requests_authenticated: number;
+  requests_rejected_auth: number;
+  requests_rejected_payload: number;
+  unique_streams: number;
+  active_subscriptions: number;
+}
+
+// one entry per custom probe registered on the agent. The
+// probe function is never serialised; only its name, description, and
+// whether it declares a config schema. The console populates the
+// custom-probe dropdown from the latest heartbeat's list.
+export interface CustomProbeDescriptor {
+  name: string;
+  description?: string;
+  has_config_schema: boolean;
+}
+
 export interface HeartbeatPayload {
   version: string;
   uptime_seconds: number;
@@ -14,6 +37,13 @@ export interface HeartbeatPayload {
   queue_capacity: number;
   agent_started_at: string;
   source_types_active: string[];
+  // OTLP receiver stats snapshot. Optional because not every
+  // agent runs the receiver (OBSERVER_OTLP_DISABLE=true) and older
+  // agent versions don't emit this field at all.
+  otlp_stats?: OtlpReceiverStatsSnapshot;
+  // custom probes registered on the agent. Optional; omitted
+  // when none are registered (and by older agents).
+  custom_probes?: CustomProbeDescriptor[];
 }
 
 export interface HealthAlertState {
