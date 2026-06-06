@@ -2,7 +2,7 @@
   "name": "@observer/probe-config",
   "version": "0.0.0",
   "private": true,
-  "description": "Phase 21 probe-type Zod schemas + write validator. Shared by cloud (apps/web) and agent (apps/agent).",
+  "description": "Probe-type Zod schemas and write validator, shared by the Observer agent and cloud.",
   "type": "module",
   "main": "./src/index.ts",
   "exports": {

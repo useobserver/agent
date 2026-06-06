@@ -1,25 +1,46 @@
-# docker-compose.yml — local Observer agent.
+# docker-compose.yml — Observer agent.
 #
-# Build context shifted to the monorepo root (../../) in Phase 23-E
-# because the agent now depends on workspace packages
-# (@observer/protocol, @observer/probe-config). Run from this dir:
-#
-#   docker compose up --build
-#
-# Phase 22 TS+Bun migration: distroless has no shell, so the
-# /healthcheck.sh probe is gone. Liveness via container exit + restart.
-#
-# Dashboard: ENABLE_DEBUG_DASHBOARD defaults true in the image; visit
-# http://localhost:10101 to inspect runtime state.
+# Runs the published image. Provide an .env file with at least AGENT_KEY,
+# PROMETHEUS_SERVER_URL, and CLOUD_SERVER_URL (see README). To build from
+# source instead, replace `image:` with:
+#   build:
+#     context: .
+#     dockerfile: Dockerfile
 
 services:
-  metrics-agent:
-    build:
-      context: ../..
-      dockerfile: apps/agent/Dockerfile
+  observer-agent:
+    image: ghcr.io/useobserver/agent:1.1.0
     container_name: observer-agent
     env_file:
       - .env
-    ports:
-      - "10101:10101"
     restart: unless-stopped
+
+    # --- Debug dashboard (optional) ---------------------------------
+    # The dashboard binds 127.0.0.1 inside the container, so publishing
+    # the port alone will not reach it. To expose it, set in your .env:
+    #   ENABLE_DEBUG_DASHBOARD=true
+    #   DEBUG_DASHBOARD_HOST=0.0.0.0
+    #   DEBUG_DASHBOARD_TOKEN=<a long random token>
+    # then publish the port:
+    # ports:
+    #   - "10101:10101"
+
+    # --- ICMP probes (optional) -------------------------------------
+    # The icmp source needs raw-socket capability:
+    # cap_add:
+    #   - NET_RAW
+
+    # --- Restricted networks (optional) -----------------------------
+    # Proxy + custom-CA support. These are honored by the Bun runtime
+    # (verified on Bun 1.3.6). Prefer setting the proxy vars in .env;
+    # the CA bundle must be mounted into the container. See the
+    # "Restricted networks" section of the README.
+    # environment:
+    #   - HTTPS_PROXY=http://proxy.corp:3128
+    #   - HTTP_PROXY=http://proxy.corp:3128
+    #   # internal probe targets bypass the proxy (no CIDR support):
+    #   - NO_PROXY=prometheus.internal,.corp.local
+    #   # TLS-inspecting proxy CA (do NOT use SKIP_SSL_VERIFICATION):
+    #   - NODE_EXTRA_CA_CERTS=/etc/observer/corp-ca.pem
+    # volumes:
+    #   - ./corp-ca.pem:/etc/observer/corp-ca.pem:ro

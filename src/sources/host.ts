@@ -1,4 +1,4 @@
-// Host-metrics source (OBS-107) — the agent PRODUCES host vitals so a
+// Host-metrics source — the agent PRODUCES host vitals so a
 // fresh deploy gives instant signal with no external source configured.
 //
 // Linux is first-class (read from /proc + node:fs statfs). On other

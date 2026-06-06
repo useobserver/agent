@@ -405,7 +405,7 @@ export type WebsocketConfig = z.infer<typeof WebsocketConfigSchema>;
 export type MtlsHttpConfig = z.infer<typeof MtlsHttpConfigSchema>;
 export type DatabaseConfig = z.infer<typeof DatabaseConfigSchema>;
 
-// runtime: shipped (OBS-107) — agent-produced host metrics.
+// runtime: shipped — agent-produced host metrics.
 //
 // The agent reads these from the host it runs on (no external source),
 // so deploying the agent gives instant signal. `metric` selects what

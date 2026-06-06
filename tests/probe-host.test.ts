@@ -2,7 +2,7 @@
 import { describe, expect, it } from "bun:test";
 import { execute, validateConfig } from "../src/sources/host";
 
-// Host-metrics probe runtime (OBS-107). The agent produces these from the
+// Host-metrics probe runtime. The agent produces these from the
 // host it runs on — no external target/credentials. Linux is first-class
 // (/proc); other platforms fall back to the `os` module where meaningful
 // and return no_data with a typed reason otherwise. The probe never throws.
