@@ -131,6 +131,17 @@ export function createOtlpReceiver(opts: OtlpReceiverOptions): OtlpReceiverHandl
   let requestsRejectedAuth = 0;
   let requestsRejectedPayload = 0;
 
+  // Hard cap on the OTLP request body so a client (or misconfigured app)
+  // spamming oversized payloads can't OOM the agent — which would silence
+  // every metric that agent serves. Default 16MB, env-tunable down to a 1MB
+  // floor.
+  const maxBodyBytes = (() => {
+    const v = Number(process.env.OBSERVER_OTLP_MAX_BODY_BYTES);
+    const DEFAULT_MAX = 16 * 1024 * 1024;
+    const FLOOR = 1 * 1024 * 1024;
+    return Number.isFinite(v) && v >= FLOOR ? Math.trunc(v) : DEFAULT_MAX;
+  })();
+
   function streamKey(name: string, attrs: OtlpAttributes): string {
     return `${name}\x1f${attributesFingerprint(attrs)}`;
   }
@@ -183,12 +194,23 @@ export function createOtlpReceiver(opts: OtlpReceiverOptions): OtlpReceiverHandl
         status: 415,
       });
     }
+    // Reject on Content-Length before buffering anything.
+    const declaredLen = Number(req.headers.get("content-length"));
+    if (Number.isFinite(declaredLen) && declaredLen > maxBodyBytes) {
+      requestsRejectedPayload += 1;
+      return new Response("payload_too_large", { status: 413 });
+    }
     let body: string;
     try {
       body = await req.text();
     } catch {
       requestsRejectedPayload += 1;
       return new Response("body read failed", { status: 400 });
+    }
+    // Backstop for chunked/unknown-length requests (Bun reports byte length).
+    if (Buffer.byteLength(body) > maxBodyBytes) {
+      requestsRejectedPayload += 1;
+      return new Response("payload_too_large", { status: 413 });
     }
     const decoded = decodeOtlpHttpJson(body);
     if (!decoded.ok) {

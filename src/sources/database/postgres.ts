@@ -102,6 +102,12 @@ export async function runQuery(
   query: string,
   statementTimeoutMs: number,
 ): Promise<PgQueryResult | PgQueryFailure> {
+  // Mirror the mysql/mongo/redis sibling guards: a zero/NaN timeout would set
+  // statement_timeout="0", disabling the DB-side timeout entirely. Schema bounds
+  // it today, but re-check here for the out-of-band-edit scenario.
+  if (!Number.isFinite(statementTimeoutMs) || statementTimeoutMs <= 0) {
+    return { ok: false, reason: "db_invalid_timeout", detail: String(statementTimeoutMs) };
+  }
   const sql = getClient(dsn, statementTimeoutMs);
   try {
     // postgres.js exposes a tag function for parameterized queries.

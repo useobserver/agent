@@ -497,9 +497,9 @@ export function exponentialHistogramQuantile(
 export function attributesFingerprint(attrs: OtlpAttributes): string {
   const keys = Object.keys(attrs).sort();
   if (keys.length === 0) return "";
-  const parts: string[] = [];
-  for (const k of keys) parts.push(`${k}=${attrs[k]}`);
-  return parts.join("|");
+  // JSON-encode sorted [key, value] pairs so values containing the old `=`/`|`
+  // delimiters can't collide two distinct attribute sets into one stream slot.
+  return JSON.stringify(keys.map((k) => [k, attrs[k]]));
 }
 
 /**

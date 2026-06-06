@@ -35,10 +35,17 @@ export interface MongoSpec {
 // $function-bearing filter.
 const FORBIDDEN_OPERATORS = new Set(["$where", "$function", "$accumulator", "$expr"]);
 
-function scanForForbidden(value: unknown, path: string): string | null {
+const MAX_FILTER_DEPTH = 32;
+
+function scanForForbidden(value: unknown, path: string, depth = 0): string | null {
+  // Cap recursion — a deeply-nested operator-supplied filter would otherwise
+  // blow the stack with a RangeError that throws out of the (no-throw) check.
+  if (depth > MAX_FILTER_DEPTH) {
+    return `filter too deeply nested at ${path}`;
+  }
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      const r = scanForForbidden(value[i], `${path}[${i}]`);
+      const r = scanForForbidden(value[i], `${path}[${i}]`, depth + 1);
       if (r) return r;
     }
     return null;
@@ -48,7 +55,7 @@ function scanForForbidden(value: unknown, path: string): string | null {
       if (FORBIDDEN_OPERATORS.has(k)) {
         return `forbidden filter operator ${k} at ${path}`;
       }
-      const r = scanForForbidden(v, path === "" ? k : `${path}.${k}`);
+      const r = scanForForbidden(v, path === "" ? k : `${path}.${k}`, depth + 1);
       if (r) return r;
     }
   }
@@ -56,6 +63,8 @@ function scanForForbidden(value: unknown, path: string): string | null {
 }
 
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/;
+// Privileged Mongo databases — counting their contents is a recon vector.
+const RESERVED_DBS = new Set(["admin", "config", "local"]);
 
 export function checkMongoQuery(raw: string): MongoCheckResult {
   if (typeof raw !== "string") {
@@ -76,6 +85,12 @@ export function checkMongoQuery(raw: string): MongoCheckResult {
   }
   if (typeof p.collection !== "string" || !NAME_PATTERN.test(p.collection)) {
     return { ok: false, reason: "collection must be a valid identifier" };
+  }
+  if (RESERVED_DBS.has(p.db.toLowerCase())) {
+    return { ok: false, reason: "db must not be a reserved/system database" };
+  }
+  if (p.collection.toLowerCase().startsWith("system.")) {
+    return { ok: false, reason: "collection must not be a system namespace" };
   }
   if (p.op !== "countDocuments" && p.op !== "estimatedDocumentCount") {
     return { ok: false, reason: "op must be countDocuments or estimatedDocumentCount" };

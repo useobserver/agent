@@ -18,6 +18,7 @@ export const PROBE_TYPES = Object.freeze([
   "custom",
   "loki",
   "elasticsearch",
+  "host",
   "manual",
 ] as const);
 

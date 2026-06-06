@@ -13,8 +13,24 @@ interface CreateBufferOptions {
   maxRows?: number;
 }
 
+const DEFAULT_BUFFER_MAX_ROWS = 10000;
+
+// Resolve the eviction cap defensively: a non-numeric/empty BUFFER_MAX_ROWS
+// (Number("foo")=NaN, Number("")=0) must NOT disable eviction — that would let
+// the SQLite WAL grow until the disk fills. Prefer the explicit option, then
+// the env, then the default. Same guard as the postgres timeout / dashboard
+// port fixes.
+export function resolveBufferCap(maxRows?: unknown, envRaw?: unknown): number {
+  const optMax = Number(maxRows);
+  if (Number.isFinite(optMax) && optMax > 0) return Math.trunc(optMax);
+  const envMax = Number(envRaw);
+  if (Number.isFinite(envMax) && envMax > 0) return Math.trunc(envMax);
+  return DEFAULT_BUFFER_MAX_ROWS;
+}
+
 export function createBuffer(bufferPath: string, { maxRows }: CreateBufferOptions = {}): BufferAccess {
-  const cap = Number.isFinite(maxRows) ? (maxRows as number) : parseInt(process.env.BUFFER_MAX_ROWS || "10000", 10);
+  const cap = resolveBufferCap(maxRows, process.env.BUFFER_MAX_ROWS);
+  console.log(`[buffer] eviction cap = ${cap} rows`);
   const db = new Database(bufferPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");

@@ -16,9 +16,22 @@
 // The agent main loop is unaffected.
 
 import type { DashboardSnapshot } from "./types.ts";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 interface StateProvider {
   getSnapshot(): DashboardSnapshot;
+}
+
+function isLoopbackHost(h: string): boolean {
+  return h === "127.0.0.1" || h === "::1" || h === "localhost";
+}
+
+// Constant-time bearer compare for the dashboard when bound non-loopback.
+function bearerOk(authHeader: string | null, token: string): boolean {
+  if (!token) return false;
+  const a = createHash("sha256").update(authHeader ?? "").digest();
+  const b = createHash("sha256").update(`Bearer ${token}`).digest();
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // Allowlist. Names matching `*_*` glob (e.g. PROMETHEUS_*) accept any
@@ -507,15 +520,34 @@ export interface DashboardServer {
 }
 
 export function startDashboard(opts: DashboardOptions): DashboardServer {
-  const port = opts.port ?? Number(process.env.DEBUG_DASHBOARD_PORT) ?? 10101;
-  const hostname =
-    opts.hostname ?? process.env.DEBUG_DASHBOARD_HOST ?? "0.0.0.0";
+  // `Number(undefined)` is NaN and ?? doesn't catch NaN, so the documented
+  // 10101 default never applied — use || to fall through NaN.
+  const port = opts.port ?? (Number(process.env.DEBUG_DASHBOARD_PORT) || 10101);
+  // Default to loopback. The dashboard is unauthenticated read-only and
+  // exposes (masked) env + cloud URL + recent logs — binding 0.0.0.0 made it
+  // readable by any pod on the cluster. Remote exposure requires an explicit
+  // token (constant-time-checked below); without one a non-loopback request
+  // is downgraded to loopback.
+  let hostname = opts.hostname ?? process.env.DEBUG_DASHBOARD_HOST ?? "127.0.0.1";
+  const token = process.env.DEBUG_DASHBOARD_TOKEN ?? "";
+  if (!isLoopbackHost(hostname) && !token) {
+    console.warn(
+      `[WARN] DEBUG_DASHBOARD_HOST=${hostname} is non-loopback but DEBUG_DASHBOARD_TOKEN is unset — binding 127.0.0.1 instead. Set a bearer token to expose the dashboard remotely.`,
+    );
+    hostname = "127.0.0.1";
+  }
+  const authRequired = !isLoopbackHost(hostname);
 
   const server = Bun.serve({
     port,
     hostname,
     fetch(req) {
       const url = new URL(req.url);
+      // Health check stays open; everything else requires the bearer token
+      // when bound non-loopback.
+      if (authRequired && url.pathname !== "/healthz" && !bearerOk(req.headers.get("authorization"), token)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
       if (url.pathname === "/" || url.pathname === "/index.html") {
         return new Response(HTML, {
           headers: {

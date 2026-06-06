@@ -22,6 +22,7 @@ import {
   CustomConfigSchema,
   LokiConfigSchema,
   EsConfigSchema,
+  HostConfigSchema,
 } from "./schemas";
 import { PROBE_TYPES, type ProbeType } from "./probe-types";
 
@@ -42,6 +43,7 @@ const SCHEMAS: Record<ProbeType, ZodTypeAny> = {
   custom: CustomConfigSchema,
   loki: LokiConfigSchema,
   elasticsearch: EsConfigSchema,
+  host: HostConfigSchema,
 };
 
 // Returns the Zod schema for a given source_type, or undefined if the

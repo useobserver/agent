@@ -31,6 +31,7 @@ import cloudwatch from "./cloudwatch.ts";
 import custom from "./custom/index.ts";
 import loki from "./loki.ts";
 import elasticsearch from "./elasticsearch.ts";
+import host from "./host.ts";
 
 // Each entry is the per-source default export typed as
 // `ProbeSource<TConfig>` at the module level, narrowed to
@@ -55,6 +56,7 @@ export const SOURCES: Partial<Record<SourceType, ProbeSource<any>>> = {
   custom,
   loki,
   elasticsearch,
+  host,
 };
 
 export function getSource(sourceType: string): ProbeSource | undefined {
@@ -97,7 +99,20 @@ export function getSourceClass(sourceType: string): Source<any> | undefined {
 // pushJob can both fire in the same tick) await one init, not race
 // two. The promise resolves to the SourceInstance the cache should
 // hold from then on.
-const pushInstances = new Map<string, Promise<SourceInstance>>();
+interface PushEntry {
+  hash: string;
+  promise: Promise<SourceInstance>;
+}
+const pushInstances = new Map<string, PushEntry>();
+
+// Stable fingerprint of the push config so a config edit busts the cache.
+function configHash(sourceType: string, config: Record<string, unknown>): string {
+  try {
+    return `${sourceType}::${JSON.stringify(config)}`;
+  } catch {
+    return `${sourceType}::unserializable`;
+  }
+}
 
 export async function execute(metricDef: MetricDefinition, env: AgentEnv = {}): Promise<ProbeResult> {
   const ts = (): string => new Date().toISOString();
@@ -120,8 +135,18 @@ export async function execute(metricDef: MetricDefinition, env: AgentEnv = {}): 
   // single in-flight init promise so we never double-init.
   const pushSource = PUSH_SOURCES[sourceType as SourceType];
   if (pushSource) {
-    let initPromise = pushInstances.get(metricDef.id);
-    if (!initPromise) {
+    const hash = configHash(sourceType, config);
+    let entry = pushInstances.get(metricDef.id);
+    if (entry && entry.hash !== hash) {
+      // Config changed (operator edited the OTLP metric_name / filters).
+      // Dispose the stale instance — otherwise we keep reading the OLD stream
+      // and render wrong data as truth, and the receiver subscription leaks.
+      const stale = entry;
+      pushInstances.delete(metricDef.id);
+      stale.promise.then((inst) => inst.dispose()).catch(() => {});
+      entry = undefined;
+    }
+    if (!entry) {
       const validationError = pushSource.validateConfig(config);
       if (validationError) {
         return {
@@ -132,19 +157,21 @@ export async function execute(metricDef: MetricDefinition, env: AgentEnv = {}): 
           metadata: { source_type: sourceType, error: validationError },
         };
       }
-      initPromise = Promise.resolve(pushSource.init(config, env));
-      pushInstances.set(metricDef.id, initPromise);
-      // If init rejects, drop the cached promise so the next tick can
-      // retry instead of returning the same error forever.
-      initPromise.catch(() => {
-        if (pushInstances.get(metricDef.id) === initPromise) {
+      const promise = Promise.resolve(pushSource.init(config, env));
+      const created: PushEntry = { hash, promise };
+      pushInstances.set(metricDef.id, created);
+      entry = created;
+      // If init rejects, drop the cached entry so the next tick can retry
+      // instead of returning the same error forever.
+      promise.catch(() => {
+        if (pushInstances.get(metricDef.id) === created) {
           pushInstances.delete(metricDef.id);
         }
       });
     }
     let instance: SourceInstance;
     try {
-      instance = await initPromise;
+      instance = await entry.promise;
     } catch (e) {
       return {
         value: null,
@@ -165,6 +192,13 @@ export async function execute(metricDef: MetricDefinition, env: AgentEnv = {}): 
         metadata: { source_type: sourceType, error: (e as Error).message },
       };
     }
+  }
+
+  // Reached only on the pull path. If a push instance is still cached for this
+  // id, the metric switched source_type away from a push source — dispose the
+  // orphaned receiver subscription so it doesn't leak.
+  if (pushInstances.has(metricDef.id)) {
+    void disposeForMetric(metricDef.id);
   }
 
   const source = getSource(sourceType);
@@ -199,11 +233,11 @@ export async function execute(metricDef: MetricDefinition, env: AgentEnv = {}): 
  * init() is still in-flight; we await the promise first.
  */
 export async function disposeForMetric(metricId: string): Promise<void> {
-  const initPromise = pushInstances.get(metricId);
-  if (!initPromise) return;
+  const entry = pushInstances.get(metricId);
+  if (!entry) return;
   pushInstances.delete(metricId);
   try {
-    const instance = await initPromise;
+    const instance = await entry.promise;
     await instance.dispose();
   } catch {
     // Dispose is best-effort; the entry is already out of our map.
@@ -219,8 +253,8 @@ export async function disposeAllPushInstances(): Promise<void> {
   const all = [...pushInstances.values()];
   pushInstances.clear();
   await Promise.allSettled(
-    all.map(async (p) => {
-      const instance = await p;
+    all.map(async (e) => {
+      const instance = await e.promise;
       return instance.dispose();
     }),
   );

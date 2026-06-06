@@ -193,6 +193,32 @@ describe("OTLP receiver buffer eviction", () => {
   });
 });
 
+describe("OTLP receiver body size cap (DoS guard)", () => {
+  it("413s on a body larger than the configured cap and counts the rejection", async () => {
+    await receiver!.stop();
+    const prev = process.env.OBSERVER_OTLP_MAX_BODY_BYTES;
+    // 1 MiB is the floor; build a fresh receiver pinned to it.
+    process.env.OBSERVER_OTLP_MAX_BODY_BYTES = String(1 * 1024 * 1024);
+    receiver = freshReceiver();
+    await receiver.start();
+    addr = receiver.stats().listen_addr!;
+    try {
+      const oversized = "x".repeat(2 * 1024 * 1024); // 2 MiB > 1 MiB cap
+      const r = await pushMetrics(addr, oversized);
+      expect(r.status).toBe(413);
+      expect(receiver.stats().requests_rejected_payload).toBe(1);
+    } finally {
+      if (prev === undefined) delete process.env.OBSERVER_OTLP_MAX_BODY_BYTES;
+      else process.env.OBSERVER_OTLP_MAX_BODY_BYTES = prev;
+    }
+  });
+
+  it("still accepts a normally-sized body under the cap", async () => {
+    const r = await pushMetrics(addr, sampleGauge("queue.depth", 7));
+    expect(r.status).toBe(200);
+  });
+});
+
 describe("OTLP receiver stats", () => {
   it("counts each authenticated request", async () => {
     await pushMetrics(addr, sampleGauge());

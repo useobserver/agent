@@ -35,6 +35,18 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
   const followRedirects = config.follow_redirects !== false;
   const headers = config.headers || {};
 
+  // Defense-in-depth: the Zod schema restricts url to http/https, but re-check
+  // at runtime so a stale/out-of-band config can't reach file:// (local file
+  // read+exfil) or other schemes.
+  try {
+    const proto = new URL(config.url).protocol;
+    if (proto !== "http:" && proto !== "https:") {
+      return { value: null, timestamp: ts(), status_hint: "no_data", reason: "invalid_url_scheme", metadata: { protocol: proto } };
+    }
+  } catch {
+    return { value: null, timestamp: ts(), status_hint: "no_data", reason: "invalid_url", metadata: {} };
+  }
+
   // mTLS. When cert+key refs are present, load the
   // PEM material from the agent's env and pass it on the per-request
   // tls options. Loading is cheap (env read + parse) so we don't hold
@@ -80,14 +92,30 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
   const start = Date.now();
 
   try {
-    const res = await fetch(config.url, {
-      method,
-      headers,
-      signal: controller.signal,
-      redirect: followRedirects ? "follow" : "manual",
-      // Bun-specific knob — node-fetch ignores.
-      tls: tlsOptions,
-    } as RequestInit & { tls?: Record<string, unknown> });
+    // Follow redirects manually so operator-supplied headers (which may carry
+    // auth) are DROPPED on a cross-origin hop — `redirect:"follow"` would
+    // re-send them to the redirect target. Same-origin hops keep the headers.
+    const MAX_REDIRECTS = 5;
+    const origin0 = new URL(config.url).origin;
+    let currentUrl = config.url;
+    let reqHeaders: Record<string, string> = { ...headers };
+    let res: Response;
+    for (let hop = 0; ; hop++) {
+      res = await fetch(currentUrl, {
+        method,
+        headers: reqHeaders,
+        signal: controller.signal,
+        redirect: "manual",
+        // Bun-specific knob — node-fetch ignores.
+        tls: tlsOptions,
+      } as RequestInit & { tls?: Record<string, unknown> });
+      if (!followRedirects || res.status < 300 || res.status >= 400 || hop >= MAX_REDIRECTS) break;
+      const loc = res.headers.get("location");
+      if (!loc) break;
+      const next = new URL(loc, currentUrl);
+      if (next.origin !== origin0) reqHeaders = {}; // strip headers cross-origin
+      currentUrl = next.toString();
+    }
     const elapsed = Date.now() - start;
 
     if (!expected.includes(res.status)) {

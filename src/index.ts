@@ -9,13 +9,12 @@ import { startDashboard, maskEnv } from "./dashboard.ts";
 import { getOtlpReceiver } from "./sources/otlp/receiver.ts";
 import sources from "./sources/index.ts";
 import { describeCustomProbes } from "./sources/custom/registry.ts";
-import { evaluateStatus } from "./status.ts";
+import { evaluate } from "./evaluator.ts";
 import type {
   DashboardSnapshot,
   HeartbeatPayload,
   MetricDefinition,
   MetricSamplePayload,
-  Operation,
 } from "./types.ts";
 
 // Defaults.
@@ -26,7 +25,10 @@ const DEFAULT_PROMETHEUS_PASSWORD = "";
 const DEFAULT_VERBOSE = "false";
 const DEFAULT_BROADCAST_LOGS = "false";
 const DEFAULT_LOG_BROADCAST_LEVEL = "WARN";
-const DEFAULT_SKIP_SSL_VERIFICATION = "true";
+// Secure by default: TLS cert verification is ON for the cloud channel.
+// Operators may opt out only by explicitly setting SKIP_SSL_VERIFICATION=true
+// (local/self-signed dev), and the agent warns loudly at boot when they do.
+const DEFAULT_SKIP_SSL_VERIFICATION = "false";
 const DEFAULT_ENABLE_DEBUG_DASHBOARD = "true";
 
 const LEVEL_RANK: Record<string, number> = {
@@ -54,6 +56,12 @@ const {
 const broadcastThreshold = LEVEL_RANK[String(LOG_BROADCAST_LEVEL).toUpperCase()] ?? LEVEL_RANK.WARN;
 const isVerbose = VERBOSE === "true";
 const skipSslVerification = SKIP_SSL_VERIFICATION === "true";
+if (skipSslVerification) {
+  console.warn(
+    "[WARN] SKIP_SSL_VERIFICATION=true — TLS certificate verification is DISABLED on the cloud channel. " +
+      "The AGENT_KEY is exposed to man-in-the-middle interception. Use only for local/self-signed dev.",
+  );
+}
 
 if (!PROMETHEUS_SERVER_URL) {
   console.error("[ERROR] PROMETHEUS_SERVER_URL is mandatory.");
@@ -232,9 +240,19 @@ async function cloudFetch(path: string, init: RequestInit = {}): Promise<Respons
   const res = await fetch(url, {
     ...init,
     headers,
+    // Do NOT follow redirects — the cloud doesn't legitimately redirect agents,
+    // and `redirect:"follow"` would re-send the Agent-Key to a (cross-origin)
+    // redirect target. Abort on any 3xx instead.
+    redirect: "manual",
     // Bun-specific knob.
     tls: { rejectUnauthorized: !skipSslVerification },
   } as RequestInit & { tls?: { rejectUnauthorized: boolean } });
+  if (res.status >= 300 && res.status < 400) {
+    console.warn(`[WARN] cloud responded ${res.status} redirect for ${path} — not followed (Agent-Key not re-sent).`);
+    const err = new Error(`HTTP ${res.status} redirect (not followed)`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   if (!res.ok) {
     const err = new Error(`HTTP ${res.status}`) as Error & { status?: number };
     err.status = res.status;
@@ -550,35 +568,32 @@ const startMetricPolling = async (): Promise<void> => {
           log("INFO", `Fetching metric: ${label}`);
           try {
             const result = await runProbe();
-            if (result.status_hint === "no_data") {
-              recordOutcome("no_data", null, result.timestamp, result.reason ?? null);
+            // Single evaluation entry point: handles no_data, null, and
+            // non-finite values uniformly (non-finite → no_data, never a
+            // spurious "degraded"). Replaces the inline evaluateStatus + casts.
+            const ev = evaluate(definition, result);
+            if (ev.status === "no_data") {
+              recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
               if (lastStatus !== "no_data") {
                 lastStatus = "no_data";
                 sendMetricsToCloudServer({
                   metric_id: id,
                   value: 0,
-                  timestamp: result.timestamp,
+                  timestamp: ev.timestamp,
                   status: "no_data",
-                  reason: result.reason ?? "no_data",
+                  reason: ev.reason ?? "no_data",
                 });
               }
               return;
             }
-            const currentStatus = evaluateStatus(
-              result.value as number,
-              healthy_operation as Operation,
-              Number(healthy_value),
-              unhealthy_operation as Operation,
-              Number(unhealthy_value)
-            );
-            recordOutcome(currentStatus, result.value, result.timestamp, null);
-            if (currentStatus !== lastStatus || lastStatus === null) {
-              lastStatus = currentStatus;
+            recordOutcome(ev.status, ev.value, ev.timestamp, null);
+            if (ev.status !== lastStatus || lastStatus === null) {
+              lastStatus = ev.status;
               sendMetricsToCloudServer({
                 metric_id: id,
-                value: result.value as number,
-                timestamp: result.timestamp,
-                status: currentStatus,
+                value: ev.value ?? 0,
+                timestamp: ev.timestamp,
+                status: ev.status,
               });
             }
           } catch (error) {
@@ -600,28 +615,22 @@ const startMetricPolling = async (): Promise<void> => {
         const pushJob = scheduleEvery(interval_agent_push, async () => {
           try {
             const result = await runProbe();
-            if (result.status_hint === "no_data") {
+            const ev = evaluate(definition, result);
+            if (ev.status === "no_data") {
               sendMetricsToCloudServer({
                 metric_id: id,
                 value: 0,
-                timestamp: result.timestamp,
+                timestamp: ev.timestamp,
                 status: "no_data",
-                reason: result.reason ?? "no_data",
+                reason: ev.reason ?? "no_data",
               });
               return;
             }
-            const currentStatus = evaluateStatus(
-              result.value as number,
-              healthy_operation as Operation,
-              Number(healthy_value),
-              unhealthy_operation as Operation,
-              Number(unhealthy_value)
-            );
             sendMetricsToCloudServer({
               metric_id: id,
-              value: result.value as number,
-              timestamp: result.timestamp,
-              status: currentStatus,
+              value: ev.value ?? 0,
+              timestamp: ev.timestamp,
+              status: ev.status,
             });
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);

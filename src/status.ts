@@ -7,6 +7,11 @@
 export type Operation = "over" | "under" | "equal";
 
 export function evaluateOperation(value: number, operation: Operation, threshold: number): boolean {
+  // Non-finite value or threshold can't satisfy any strict operator — return
+  // false so a NaN/Infinity never yields a spurious healthy/unhealthy verdict.
+  // (evaluate() already routes non-finite values to no_data; this hardens any
+  // direct caller.)
+  if (!Number.isFinite(value) || !Number.isFinite(threshold)) return false;
   switch (operation) {
     case "over":
       return value > threshold;

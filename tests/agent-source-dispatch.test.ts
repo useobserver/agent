@@ -13,7 +13,7 @@ import sources from "../src/sources/index";
 
 describe("getSource", () => {
   it("exposes every probe type", () => {
-    const types = ["prometheus", "http", "tcp", "dns", "tls_cert", "icmp", "grpc", "websocket", "mtls_http", "database"];
+    const types = ["prometheus", "http", "tcp", "dns", "tls_cert", "icmp", "grpc", "websocket", "mtls_http", "database", "host"];
     for (const t of types) {
       expect(typeof sources.getSource(t)?.execute).toBe("function");
       expect(typeof sources.getSource(t)?.validateConfig).toBe("function");

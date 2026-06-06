@@ -150,6 +150,7 @@ describe("Source lifecycle", () => {
       "dns",
       "elasticsearch",
       "grpc",
+      "host",
       "http",
       "icmp",
       "loki",

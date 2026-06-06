@@ -22,7 +22,22 @@ const envVarRef = z
   .regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE env var name");
 
 const httpFields = {
-  url: z.string().url(),
+  // Restrict to http/https. z.string().url() alone admits file://, which on the
+  // agent host turns body_match / json_path into a local-file read+exfil oracle
+  // (e.g. reading the agent's own PEM keys). Mirrors the WebSocket scheme guard.
+  url: z
+    .string()
+    .url()
+    .refine(
+      (v) => {
+        try {
+          return ["http:", "https:"].includes(new URL(v).protocol);
+        } catch {
+          return false;
+        }
+      },
+      { message: "url must use http:// or https://" },
+    ),
   method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]).default("GET"),
   expected_status: z.union([z.number().int().min(100).max(599), z.array(z.number().int().min(100).max(599)).min(1)]).default(200),
   timeout_ms: timeoutMs.default(5_000),
@@ -389,6 +404,27 @@ export type GrpcConfig = z.infer<typeof GrpcConfigSchema>;
 export type WebsocketConfig = z.infer<typeof WebsocketConfigSchema>;
 export type MtlsHttpConfig = z.infer<typeof MtlsHttpConfigSchema>;
 export type DatabaseConfig = z.infer<typeof DatabaseConfigSchema>;
+
+// runtime: shipped (OBS-107) — agent-produced host metrics.
+//
+// The agent reads these from the host it runs on (no external source),
+// so deploying the agent gives instant signal. `metric` selects what
+// the value represents:
+//   cpu         — CPU utilization %, 0..100 (busy across all cores)
+//   memory      — used memory %, 0..100
+//   filesystem  — used space % for `mountpoint`, 0..100
+//   network     — throughput on `iface` (or all non-loopback) in bytes/sec
+//   load        — 1-minute load average per core (loadavg[0] / ncpu)
+// host source_config carries NO endpoint/credentials — it always reads
+// the local host. execution_mode is forced to "agent" for this type.
+export const HostConfigSchema = z
+  .object({
+    metric: z.enum(["cpu", "memory", "filesystem", "network", "load"]),
+    mountpoint: z.string().min(1).max(256).default("/"),
+    iface: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+export type HostConfig = z.infer<typeof HostConfigSchema>;
 
 // runtime: not applicable — manual metrics carry no probe runtime.
 // Status is set explicitly via UI / API or implicitly by an open

@@ -248,5 +248,25 @@ export function checkSelectOnly(rawSql: string): QueryCheckResult {
     }
   }
 
+  // Reject state-changing constructs a SELECT/WITH leading keyword still
+  // permits — the parser is defense-in-depth for a misprovisioned read-only
+  // role, which is exactly where these matter. Strip string literals first so
+  // an INTO/INSERT *inside a quoted string* (e.g. SELECT 'INSERT INTO x') is
+  // not a false positive.
+  const noLiterals = stripped
+    .replace(/'(?:[^'\\]|\\.|'')*'/g, "''")
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const upperAll = noLiterals.toUpperCase();
+  // SELECT INTO (new table/temp), INTO OUTFILE / DUMPFILE (MySQL file write).
+  if (/\bINTO\b/.test(upperAll)) {
+    return { ok: false, reason: "INTO clause is not allowed" };
+  }
+  // Known side-effecting functions (sequence mutation, session config, backend
+  // control, large-object/file IO, dblink). Read-only pg_* (e.g. pg_database_size)
+  // intentionally NOT denied.
+  if (/\b(SETVAL|NEXTVAL|SET_CONFIG|PG_TERMINATE_BACKEND|PG_CANCEL_BACKEND|LO_EXPORT|LO_IMPORT|PG_READ_FILE|PG_LS_DIR|DBLINK)\s*\(/.test(upperAll)) {
+    return { ok: false, reason: "side-effecting function is not allowed" };
+  }
+
   return { ok: true };
 }

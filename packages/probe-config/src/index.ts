@@ -22,6 +22,7 @@ export {
   CustomConfigSchema,
   LokiConfigSchema,
   EsConfigSchema,
+  HostConfigSchema,
 } from "./schemas";
 
 export type {
@@ -41,6 +42,7 @@ export type {
   CustomConfig,
   LokiConfig,
   EsConfig,
+  HostConfig,
 } from "./schemas";
 
 export {

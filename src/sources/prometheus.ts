@@ -30,7 +30,15 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: "no_prometheus_url" };
   }
 
-  const queryUrl = new URL(`${url.replace(/\/$/, "")}/api/v1/query`);
+  // Guard the URL construction — a malformed PROMETHEUS_SERVER_URL would throw
+  // a TypeError out of execute(), violating the "sources never throw" contract
+  // the dispatcher relies on.
+  let queryUrl: URL;
+  try {
+    queryUrl = new URL(`${url.replace(/\/$/, "")}/api/v1/query`);
+  } catch {
+    return { value: null, timestamp: ts(), status_hint: "no_data", reason: "invalid_prometheus_url" };
+  }
   queryUrl.searchParams.set("query", config.query);
 
   const headers: Record<string, string> = {};

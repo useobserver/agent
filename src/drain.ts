@@ -24,13 +24,21 @@ interface ClassifiedError {
   status?: number;
 }
 
+// 4xx that mean "this payload will never succeed" — safe to ack-and-drop.
+// Everything else (401/403 token-rotation races, 408 timeout, 425 too-early,
+// 429 backpressure, all 5xx, network) is transient and MUST be retried, or the
+// SQLite WAL — which exists precisely to survive cloud unavailability — gets
+// silently emptied on a recoverable error.
+const DROP_STATUSES = new Set([400, 404, 422]);
+
 function classify(error: unknown): ClassifiedError {
   const e = error as { response?: { status?: number }; status?: number } | null | undefined;
   const status = e?.response?.status ?? e?.status;
   if (typeof status === "number" && status >= 400 && status < 500) {
-    return { kind: "client_error", status };
+    if (DROP_STATUSES.has(status)) return { kind: "client_error", status };
+    return { kind: "transient", status };
   }
-  return { kind: "transient" };
+  return { kind: "transient", status };
 }
 
 export function createDrainController(options: DrainOptions): DrainController {

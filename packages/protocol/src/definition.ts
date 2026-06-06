@@ -16,7 +16,8 @@ export type SourceType =
   | "cloudwatch"
   | "custom"
   | "loki"
-  | "elasticsearch";
+  | "elasticsearch"
+  | "host";
 
 export interface MetricDefinition {
   id: string;

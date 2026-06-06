@@ -49,13 +49,17 @@ export interface EvaluatedResult {
  */
 export function evaluate(metric: MetricDefinition, result: ProbeResult): EvaluatedResult {
   // No-data short-circuit. Value is meaningless; reason carries the
-  // failure mode (network error, no recent push, etc.).
-  if (result.status_hint === "no_data" || result.value === null) {
+  // failure mode (network error, no recent push, etc.). A non-finite value
+  // (NaN/±Infinity from a failed parseFloat) must classify as no_data, NOT
+  // silently fall through to "degraded" — the cloud renders the agent verdict
+  // as truth.
+  const nonFinite = result.value !== null && !Number.isFinite(result.value);
+  if (result.status_hint === "no_data" || result.value === null || nonFinite) {
     return {
       status: "no_data",
-      value: result.value,
+      value: nonFinite ? null : result.value,
       timestamp: result.timestamp,
-      reason: result.reason,
+      reason: nonFinite ? "non_finite_value" : result.reason,
       metadata: result.metadata,
     };
   }
