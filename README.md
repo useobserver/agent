@@ -1,3 +1,13 @@
+<p align="center">
+    <img src="assets/headline.svg" alt="Observer Agent" height="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/useobserver/agent/blob/main/LICENSE"><img src="https://img.shields.io/github/license/useobserver/agent?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/useobserver/agent/releases"><img src="https://img.shields.io/github/release/useobserver/agent.svg?style=for-the-badge" alt="Latest Release"></a>
+  <a href="https://docs.use.observer/agent"><img src="https://img.shields.io/badge/Documentation-link-blue?style=for-the-badge" alt="Documentation link"></a>
+</p>
+
 # Observer Agent
 
 The data-plane companion to [Observer](https://use.observer). The agent
@@ -6,10 +16,6 @@ locally, and pushes only the result to Observer Cloud over a single
 outbound HTTPS connection. Raw telemetry never leaves the network: the
 agent sends `{ metric_id, value, status, timestamp }`, not your query
 results or credentials.
-
-This repository is a one-way public mirror of the agent's source from a
-private monorepo. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the
-review and merge model.
 
 ```
 ┌─────────────────┐   probe (5–60s)   ┌──────────────┐   push (status only)   ┌──────────────┐
@@ -63,24 +69,24 @@ longer-lived deployment. Pin to an exact version tag rather than
 Each metric definition carries a `source_type`. The agent dispatches by
 type and reports the sample value below.
 
-| Type | Status | Sample value |
-|---|---|---|
-| `prometheus` | shipped | PromQL scalar |
-| `http` | shipped | response_time_ms |
-| `tcp` | shipped | connect_time_ms |
-| `dns` | shipped | resolve_time_ms |
-| `tls_cert` | shipped | days_until_expiry |
-| `icmp` | shipped | latency ms / packet loss % / reachability |
-| `grpc` | shipped | health state / Check latency ms |
-| `websocket` | shipped | handshake ms / round-trip ms / connection |
-| `database` | shipped | numeric scalar from a read-only query |
-| `otlp` | shipped | aggregated OTLP data-point value |
-| `cloudwatch` | shipped | latest metric value |
-| `loki` | shipped | numeric scalar from a LogQL aggregation |
-| `elasticsearch` | shipped | numeric scalar from an aggregation |
-| `custom` | shipped | numeric scalar from a registered probe function |
-| `host` | shipped | CPU / memory / filesystem / network / load-average % |
-| `mtls_http` | deprecated | delegates to `http` |
+| Type            | Status     | Sample value                                         |
+| --------------- | ---------- | ---------------------------------------------------- |
+| `prometheus`    | shipped    | PromQL scalar                                        |
+| `http`          | shipped    | response_time_ms                                     |
+| `tcp`           | shipped    | connect_time_ms                                      |
+| `dns`           | shipped    | resolve_time_ms                                      |
+| `tls_cert`      | shipped    | days_until_expiry                                    |
+| `icmp`          | shipped    | latency ms / packet loss % / reachability            |
+| `grpc`          | shipped    | health state / Check latency ms                      |
+| `websocket`     | shipped    | handshake ms / round-trip ms / connection            |
+| `database`      | shipped    | numeric scalar from a read-only query                |
+| `otlp`          | shipped    | aggregated OTLP data-point value                     |
+| `cloudwatch`    | shipped    | latest metric value                                  |
+| `loki`          | shipped    | numeric scalar from a LogQL aggregation              |
+| `elasticsearch` | shipped    | numeric scalar from an aggregation                   |
+| `custom`        | shipped    | numeric scalar from a registered probe function      |
+| `host`          | shipped    | CPU / memory / filesystem / network / load-average % |
+| `mtls_http`     | deprecated | delegates to `http`                                  |
 
 `icmp` shells out to the system `ping` and needs the `CAP_NET_RAW`
 capability (or equivalent) on the host. `mtls_http` is retained for
@@ -98,38 +104,38 @@ from named host environment variables and never sent to the cloud.
 
 ## Environment
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `AGENT_KEY` | yes | — | Per-agent authentication credential (`obs_live_…`) |
-| `PROMETHEUS_SERVER_URL` | yes | — | Reachable Prometheus endpoint |
-| `CLOUD_SERVER_URL` | no | `https://localhost:3000` | Observer Cloud receiver |
-| `PROMETHEUS_BASIC_AUTH_ENABLED` | no | `true` | Toggle HTTP basic auth on Prometheus |
-| `PROMETHEUS_USERNAME` | no | `admin` | Basic-auth username, used when basic auth is enabled |
-| `PROMETHEUS_PASSWORD` | no | — | Basic-auth password, used when basic auth is enabled |
-| `VERBOSE` | no | `false` | DEBUG-level local log volume |
-| `BROADCAST_LOGS` | no | `false` | Forward agent logs to the cloud for the operator dashboard |
-| `LOG_BROADCAST_LEVEL` | no | `WARN` | Minimum level to forward |
-| `SKIP_SSL_VERIFICATION` | no | `false` | TLS certificate verification on the cloud channel is ON by default. Set `true` only to trust self-signed certs in dev. |
-| `ENABLE_DEBUG_DASHBOARD` | no | `true` | Serve the local debug dashboard |
-| `DEBUG_DASHBOARD_HOST` | no | `127.0.0.1` | Dashboard bind address. Loopback-only by default; a non-loopback host requires `DEBUG_DASHBOARD_TOKEN` |
-| `DEBUG_DASHBOARD_PORT` | no | `10101` | Dashboard port |
-| `DEBUG_DASHBOARD_TOKEN` | no | — | Bearer token gating the dashboard. Required before it will bind a non-loopback `DEBUG_DASHBOARD_HOST` |
-| `BUFFER_MAX_ROWS` | no | `10000` | Max rows in the local SQLite push buffer before oldest-row eviction |
-| `BUFFER_PATH` | no | `./observer-agent-buffer.db` | Path to the local SQLite buffer file |
-| `OBSERVER_OTLP_DISABLE` | no | `false` | Set `true` to disable the built-in OpenTelemetry Protocol receiver |
-| `OBSERVER_OTLP_LISTEN_ADDR` | no | `127.0.0.1:4318` | OTLP/HTTP receiver bind address. A non-loopback bind requires `OBSERVER_OTLP_BEARER_TOKEN` |
-| `OBSERVER_OTLP_BEARER_TOKEN` | no | — | Bearer token required when the OTLP receiver binds a non-loopback interface |
-| `OBSERVER_OTLP_MAX_BODY_BYTES` | no | `16777216` | Max OTLP request body size (16 MiB; 1 MiB floor) |
-| `OBSERVER_OTLP_MAX_BUFFER_POINTS` | no | `1000` | Max distinct OTLP streams buffered before oldest-stream eviction |
-| `HTTPS_PROXY` | no | — | Proxy for outbound HTTPS, e.g. the cloud channel (honored by the Bun runtime). See [Restricted networks](#restricted-networks-proxy--egress-allowlist) |
-| `HTTP_PROXY` | no | — | Proxy for outbound plain HTTP (honored by the Bun runtime) |
-| `NO_PROXY` | no | — | Comma-separated hosts/suffixes/IPs that bypass the proxy (honored by the Bun runtime). No CIDR support |
-| `NODE_EXTRA_CA_CERTS` | no | — | Path to an additional CA bundle to trust, e.g. a TLS-inspecting proxy's CA (honored by the Bun runtime) |
+| Variable                          | Required | Default                      | Purpose                                                                                                                                                |
+| --------------------------------- | -------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AGENT_KEY`                       | yes      | —                            | Per-agent authentication credential (`obs_live_…`)                                                                                                     |
+| `PROMETHEUS_SERVER_URL`           | yes      | —                            | Reachable Prometheus endpoint                                                                                                                          |
+| `CLOUD_SERVER_URL`                | no       | `https://localhost:3000`     | Observer Cloud receiver                                                                                                                                |
+| `PROMETHEUS_BASIC_AUTH_ENABLED`   | no       | `true`                       | Toggle HTTP basic auth on Prometheus                                                                                                                   |
+| `PROMETHEUS_USERNAME`             | no       | `admin`                      | Basic-auth username, used when basic auth is enabled                                                                                                   |
+| `PROMETHEUS_PASSWORD`             | no       | —                            | Basic-auth password, used when basic auth is enabled                                                                                                   |
+| `VERBOSE`                         | no       | `false`                      | DEBUG-level local log volume                                                                                                                           |
+| `BROADCAST_LOGS`                  | no       | `false`                      | Forward agent logs to the cloud for the operator dashboard                                                                                             |
+| `LOG_BROADCAST_LEVEL`             | no       | `WARN`                       | Minimum level to forward                                                                                                                               |
+| `SKIP_SSL_VERIFICATION`           | no       | `false`                      | TLS certificate verification on the cloud channel is ON by default. Set `true` only to trust self-signed certs in dev.                                 |
+| `ENABLE_DEBUG_DASHBOARD`          | no       | `true`                       | Serve the local debug dashboard                                                                                                                        |
+| `DEBUG_DASHBOARD_HOST`            | no       | `127.0.0.1`                  | Dashboard bind address. Loopback-only by default; a non-loopback host requires `DEBUG_DASHBOARD_TOKEN`                                                 |
+| `DEBUG_DASHBOARD_PORT`            | no       | `10101`                      | Dashboard port                                                                                                                                         |
+| `DEBUG_DASHBOARD_TOKEN`           | no       | —                            | Bearer token gating the dashboard. Required before it will bind a non-loopback `DEBUG_DASHBOARD_HOST`                                                  |
+| `BUFFER_MAX_ROWS`                 | no       | `10000`                      | Max rows in the local SQLite push buffer before oldest-row eviction                                                                                    |
+| `BUFFER_PATH`                     | no       | `./observer-agent-buffer.db` | Path to the local SQLite buffer file                                                                                                                   |
+| `OBSERVER_OTLP_DISABLE`           | no       | `false`                      | Set `true` to disable the built-in OpenTelemetry Protocol receiver                                                                                     |
+| `OBSERVER_OTLP_LISTEN_ADDR`       | no       | `127.0.0.1:4318`             | OTLP/HTTP receiver bind address. A non-loopback bind requires `OBSERVER_OTLP_BEARER_TOKEN`                                                             |
+| `OBSERVER_OTLP_BEARER_TOKEN`      | no       | —                            | Bearer token required when the OTLP receiver binds a non-loopback interface                                                                            |
+| `OBSERVER_OTLP_MAX_BODY_BYTES`    | no       | `16777216`                   | Max OTLP request body size (16 MiB; 1 MiB floor)                                                                                                       |
+| `OBSERVER_OTLP_MAX_BUFFER_POINTS` | no       | `1000`                       | Max distinct OTLP streams buffered before oldest-stream eviction                                                                                       |
+| `HTTPS_PROXY`                     | no       | —                            | Proxy for outbound HTTPS, e.g. the cloud channel (honored by the Bun runtime). See [Restricted networks](#restricted-networks-proxy--egress-allowlist) |
+| `HTTP_PROXY`                      | no       | —                            | Proxy for outbound plain HTTP (honored by the Bun runtime)                                                                                             |
+| `NO_PROXY`                        | no       | —                            | Comma-separated hosts/suffixes/IPs that bypass the proxy (honored by the Bun runtime). No CIDR support                                                 |
+| `NODE_EXTRA_CA_CERTS`             | no       | —                            | Path to an additional CA bundle to trust, e.g. a TLS-inspecting proxy's CA (honored by the Bun runtime)                                                |
 
 ## Security and privacy
 
 - **Verdicts only.** The push payload is `{ metric_id, value, status,
-  timestamp }`. Query strings, credentials, and raw responses stay on
+timestamp }`. Query strings, credentials, and raw responses stay on
   your host; query strings are sha256-prefixed in any logs.
 - **TLS on by default.** Certificate verification on the cloud channel
   is enabled unless you explicitly set `SKIP_SSL_VERIFICATION=true`.
@@ -185,13 +191,13 @@ export NO_PROXY="prometheus.internal,.corp.local,10.20.30.40"
 
 Verified `NO_PROXY` matching semantics on Bun 1.3.6:
 
-| Form | Example | Matches |
-|---|---|---|
-| Exact host | `prometheus.internal` | that host |
-| Domain suffix (leading dot) | `.corp.local` | `*.corp.local` |
-| Bare suffix | `corp.local` | any host ending in `corp.local` |
-| Exact IP | `10.20.30.40` | that address |
-| Match-all | `*` | every host (disables the proxy) |
+| Form                        | Example               | Matches                         |
+| --------------------------- | --------------------- | ------------------------------- |
+| Exact host                  | `prometheus.internal` | that host                       |
+| Domain suffix (leading dot) | `.corp.local`         | `*.corp.local`                  |
+| Bare suffix                 | `corp.local`          | any host ending in `corp.local` |
+| Exact IP                    | `10.20.30.40`         | that address                    |
+| Match-all                   | `*`                   | every host (disables the proxy) |
 
 **Not supported** (verified to NOT match): **CIDR ranges**
 (`10.0.0.0/8`) and mid-string globs (`host.*`). List internal targets by
@@ -239,6 +245,10 @@ depth, recent pushes, and active source types. To reach it from another
 host, set `DEBUG_DASHBOARD_HOST` and a `DEBUG_DASHBOARD_TOKEN`, then send
 the token as a bearer credential.
 
+<p align="center">
+    <img src="assets/screenshot.jpg" alt="Observer Agent - Debug dashboard" height="100%">
+</p>
+
 ## How it works
 
 The agent refetches its metric definitions from the cloud every 5
@@ -257,7 +267,10 @@ Every source implements the same `Source` lifecycle contract defined in
 export interface Source<TConfig = Record<string, unknown>> {
   readonly mode: "pull" | "push";
   validateConfig(config: unknown): null | string;
-  init(config: TConfig, env?: unknown): Promise<SourceInstance> | SourceInstance;
+  init(
+    config: TConfig,
+    env?: unknown,
+  ): Promise<SourceInstance> | SourceInstance;
 }
 
 export interface SourceInstance {
@@ -304,6 +317,7 @@ is `=`. A value exactly equal to a threshold under `over`/`under` does
 NOT match. The same rule is enforced server-side in Observer Cloud.
 
 Per-metric:
+
 - if the value matches `healthy_*` → `healthy`;
 - else if it matches `unhealthy_*` → `unhealthy`;
 - else `degraded`.
