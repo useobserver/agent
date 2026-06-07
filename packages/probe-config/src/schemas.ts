@@ -10,10 +10,10 @@
 
 import { z } from "zod";
 
-// Status-flip dwell bounds (metrics_def.dwell_seconds_to_breach / _to_recover).
-// Single source of truth for every write path — metric forms, server actions,
-// config-as-code apply — per the validation-bounds-everywhere rule. Defaults
-// mirror the column defaults in apps/web/lib/schema.ts.
+// Status-flip dwell bounds (dwell_seconds_to_breach / dwell_seconds_to_recover
+// on a metric definition). Single source of truth for every surface that
+// writes these values, so out-of-range input is rejected identically
+// everywhere.
 export const DWELL_SECONDS_MIN = 0; // 0 = flip on the next confirming sample
 export const DWELL_SECONDS_MAX = 3600;
 export const DWELL_BREACH_DEFAULT = 180;

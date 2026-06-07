@@ -110,15 +110,15 @@ export function uptimeSecondsToPct(uptimeSeconds24h: number): number {
 // ---------------------------------------------------------------------------
 // Duplicate-key detection — "most recent agent_started_at wins".
 //
-// Two agent processes deployed with the same key both authenticate as the
-// same agents row. The process with the newest started_at owns the row;
-// anything older is "stale" and gets fenced (heartbeats ignored beyond the
-// duplicate flag, receiver pushes rejected with 409).
+// Two agent processes deployed with the same key present as the same agent
+// identity. The process with the newest started_at owns that identity;
+// anything older is "stale" and gets fenced (heartbeats acknowledged but
+// ignored beyond the duplicate flag, pushes rejected with 409).
 //
 // Timestamps must be compared as epoch millis, NOT lexicographically: the
-// agent sends Date.toISOString() ("...Z") but values read back from
-// Postgres render as "... +00" — string comparison across the two formats
-// is meaningless.
+// agent sends Date.toISOString() ("...Z") while the stored value may come
+// back rendered in a different timestamp format — string comparison across
+// formats is meaningless.
 
 export type StartedAtClass = "first" | "same" | "restart" | "stale" | "unknown";
 
@@ -144,7 +144,8 @@ export function classifyStartedAt(
 // clears the duplicate_key flag (and emits the "cleared" webhook).
 export const DUPLICATE_CLEAR_MS = 10 * 60 * 1000;
 
-// State riding on agents.health_alert_state.duplicate_key.
+// Duplicate-key alert state, tracked per agent alongside the lag and
+// uptime alert states.
 export interface DuplicateKeyState {
   state: "off" | "on";
   open_at?: string;

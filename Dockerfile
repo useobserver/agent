@@ -1,16 +1,13 @@
-# Observer agent — public mirror image (Bun + distroless).
+# Observer agent image (Bun + distroless).
 #
-# This is the public-mirror Dockerfile. The monorepo's
-# apps/agent/Dockerfile uses workspace paths (apps/agent/, packages/);
-# the public repo lives in a flat layout (src/, packages/*) so this
-# file's COPY lines reflect the mirrored structure.
+# Layout: src/ holds the agent, packages/* hold its shared
+# protocol/config libraries. The COPY lines below follow that shape.
 
 FROM oven/bun:1.3.6-alpine AS builder
 WORKDIR /repo
 
-# Public mirror has no committed lockfile (the monorepo's bun.lock
-# references private workspace members that don't exist here). Bun
-# generates one during install — accept the drift.
+# No committed lockfile; bun generates one during install. Dependency
+# versions are pinned by package.json ranges plus the image digest.
 COPY package.json ./
 COPY packages ./packages
 RUN --mount=type=cache,target=/root/.bun/install/cache \

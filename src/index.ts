@@ -74,8 +74,8 @@ if (!AGENT_KEY) {
 
 // Single source of truth: the agent's package.json. Bumping the package
 // version + pushing an `agent-v<semver>` tag both stamps the GHCR image
-// AND propagates the new version to every heartbeat → agents.version
-// → dashboard.
+// AND propagates the new version to every heartbeat, which is what the
+// dashboard renders next to the agent.
 const AGENT_VERSION = (pkg as { version: string }).version;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const AGENT_STARTED_AT = new Date().toISOString();
