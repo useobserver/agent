@@ -10,6 +10,20 @@
 
 import { z } from "zod";
 
+// Status-flip dwell bounds (metrics_def.dwell_seconds_to_breach / _to_recover).
+// Single source of truth for every write path — metric forms, server actions,
+// config-as-code apply — per the validation-bounds-everywhere rule. Defaults
+// mirror the column defaults in apps/web/lib/schema.ts.
+export const DWELL_SECONDS_MIN = 0; // 0 = flip on the next confirming sample
+export const DWELL_SECONDS_MAX = 3600;
+export const DWELL_BREACH_DEFAULT = 180;
+export const DWELL_RECOVER_DEFAULT = 300;
+export const dwellSecondsSchema = z.coerce
+  .number()
+  .int()
+  .min(DWELL_SECONDS_MIN)
+  .max(DWELL_SECONDS_MAX);
+
 const port = z.number().int().min(1).max(65535);
 const timeoutMs = z.number().int().min(1).max(60_000);
 const nonEmptyString = z.string().min(1);

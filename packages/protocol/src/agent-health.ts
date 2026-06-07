@@ -106,3 +106,86 @@ export function uptimeSecondsToPct(uptimeSeconds24h: number): number {
   if (uptimeSeconds24h >= 86_400) return 100;
   return Math.floor((uptimeSeconds24h * 100) / 86_400);
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate-key detection — "most recent agent_started_at wins".
+//
+// Two agent processes deployed with the same key both authenticate as the
+// same agents row. The process with the newest started_at owns the row;
+// anything older is "stale" and gets fenced (heartbeats ignored beyond the
+// duplicate flag, receiver pushes rejected with 409).
+//
+// Timestamps must be compared as epoch millis, NOT lexicographically: the
+// agent sends Date.toISOString() ("...Z") but values read back from
+// Postgres render as "... +00" — string comparison across the two formats
+// is meaningless.
+
+export type StartedAtClass = "first" | "same" | "restart" | "stale" | "unknown";
+
+function parseMs(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+export function classifyStartedAt(
+  stored: string | null | undefined,
+  incoming: string | null | undefined,
+): StartedAtClass {
+  const incomingMs = parseMs(incoming);
+  if (incomingMs == null) return "unknown"; // old agent / garbage — no fencing
+  const storedMs = parseMs(stored);
+  if (storedMs == null) return "first";
+  if (incomingMs === storedMs) return "same";
+  return incomingMs > storedMs ? "restart" : "stale";
+}
+
+// How long the stale side must stay quiet before a non-stale heartbeat
+// clears the duplicate_key flag (and emits the "cleared" webhook).
+export const DUPLICATE_CLEAR_MS = 10 * 60 * 1000;
+
+// State riding on agents.health_alert_state.duplicate_key.
+export interface DuplicateKeyState {
+  state: "off" | "on";
+  open_at?: string;
+  last_stale_seen_at?: string;
+  stale_started_at?: string;
+}
+
+// A stale heartbeat arrived: open (or refresh) the flag.
+// event "open" fires only on the off→on transition.
+export function duplicateSeen(
+  prev: DuplicateKeyState | null | undefined,
+  nowMs: number,
+  staleStartedAt: string,
+): TransitionResult & { newState: DuplicateKeyState } {
+  const now = new Date(nowMs).toISOString();
+  const s: DuplicateKeyState = prev && typeof prev === "object" ? prev : { state: "off" };
+  if (s.state === "on") {
+    return {
+      newState: { ...s, last_stale_seen_at: now, stale_started_at: staleStartedAt },
+      event: null,
+    };
+  }
+  return {
+    newState: { state: "on", open_at: now, last_stale_seen_at: now, stale_started_at: staleStartedAt },
+    event: { kind: "open", at: now },
+  };
+}
+
+// A non-stale heartbeat arrived: clear the flag once the stale side has
+// been quiet for clearAfterMs.
+export function duplicateTick(
+  prev: DuplicateKeyState | null | undefined,
+  nowMs: number,
+  clearAfterMs: number = DUPLICATE_CLEAR_MS,
+): TransitionResult & { newState: DuplicateKeyState } {
+  const s: DuplicateKeyState = prev && typeof prev === "object" ? prev : { state: "off" };
+  if (s.state !== "on") return { newState: s, event: null };
+  const lastSeenMs = parseMs(s.last_stale_seen_at) ?? 0;
+  if (nowMs - lastSeenMs >= clearAfterMs) {
+    const now = new Date(nowMs).toISOString();
+    return { newState: { state: "off" }, event: { kind: "cleared", at: now } };
+  }
+  return { newState: s, event: null };
+}

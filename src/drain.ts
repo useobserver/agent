@@ -29,7 +29,14 @@ interface ClassifiedError {
 // 429 backpressure, all 5xx, network) is transient and MUST be retried, or the
 // SQLite WAL — which exists precisely to survive cloud unavailability — gets
 // silently emptied on a recoverable error.
-const DROP_STATUSES = new Set([400, 404, 422]);
+//
+// 409 is the duplicate-key fence: another process with a newer started_at
+// owns this key, and the cloud will keep rejecting this process until it
+// restarts. Retrying would queue-spin forever, so drop — with a dedicated,
+// throttled warning instead of the per-row drop log.
+const DROP_STATUSES = new Set([400, 404, 409, 422]);
+
+const FENCE_WARN_INTERVAL_MS = 5 * 60 * 1_000;
 
 function classify(error: unknown): ClassifiedError {
   const e = error as { response?: { status?: number }; status?: number } | null | undefined;
@@ -54,6 +61,7 @@ export function createDrainController(options: DrainOptions): DrainController {
   if (typeof post !== "function") throw new Error("createDrainController: post is required");
 
   let backoffMs = backoffMinMs;
+  let lastFenceWarnAtMs = 0;
 
   async function drainOnce(): Promise<DrainTickResult> {
     if (buffer.size() === 0) {
@@ -81,7 +89,18 @@ export function createDrainController(options: DrainOptions): DrainController {
         } catch (error) {
           const c = classify(error);
           if (c.kind === "client_error") {
-            log("WARN", `Cloud rejected payload (HTTP ${c.status}); dropping row id=${row.id}.`);
+            if (c.status === 409) {
+              const nowMs = Date.now();
+              if (nowMs - lastFenceWarnAtMs >= FENCE_WARN_INTERVAL_MS) {
+                lastFenceWarnAtMs = nowMs;
+                log(
+                  "WARN",
+                  "Cloud fenced this process (HTTP 409): another agent process with a newer start time is using this key. Samples from this process are dropped — stop one of the two processes or rotate the key.",
+                );
+              }
+            } else {
+              log("WARN", `Cloud rejected payload (HTTP ${c.status}); dropping row id=${row.id}.`);
+            }
             buffer.ack(row.id);
             dropped += 1;
             continue;

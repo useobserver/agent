@@ -29,9 +29,14 @@ export { asPullSource } from "./source";
 
 export type { SourceType, MetricDefinition } from "./definition";
 
+export type { StartedAtClass, DuplicateKeyState } from "./agent-health";
 export {
   classifyLagSignal,
   classifyUptimeSignal,
   transition,
   uptimeSecondsToPct,
+  classifyStartedAt,
+  duplicateSeen,
+  duplicateTick,
+  DUPLICATE_CLEAR_MS,
 } from "./agent-health";

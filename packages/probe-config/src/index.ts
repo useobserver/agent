@@ -3,6 +3,11 @@
 export { PROBE_TYPES, type ProbeType } from "./probe-types";
 
 export {
+  DWELL_SECONDS_MIN,
+  DWELL_SECONDS_MAX,
+  DWELL_BREACH_DEFAULT,
+  DWELL_RECOVER_DEFAULT,
+  dwellSecondsSchema,
   PrometheusConfigSchema,
   HttpConfigSchema,
   TcpConfigSchema,

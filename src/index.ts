@@ -235,6 +235,10 @@ async function cloudFetch(path: string, init: RequestInit = {}): Promise<Respons
   const headers: HeadersInit = {
     "Content-Type": "application/json",
     "Agent-Key": AGENT_KEY!,
+    // Duplicate-key fencing: the cloud compares this against the stored
+    // agent_started_at and 409s receiver pushes from any process older than
+    // the most recently started one sharing this key.
+    "Agent-Started-At": AGENT_STARTED_AT,
     ...((init.headers as Record<string, string>) ?? {}),
   };
   const res = await fetch(url, {
