@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="assets/headline.svg" alt="Observer Agent" height="100%">
+    <img src="assets/headline.png" alt="Observer Agent" height="100%">
 </p>
 
 <p align="center">
