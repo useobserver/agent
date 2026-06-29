@@ -35,6 +35,24 @@ const envVarRef = z
   .max(256)
   .regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE env var name");
 
+// http/https only. z.string().url() alone admits file:// (and other schemes),
+// which on the agent host can become a local-file read/exfil oracle via the
+// metric-value extraction path. Used by every metric-source base URL.
+const httpUrl = () =>
+  z
+    .string()
+    .url()
+    .refine(
+      (v) => {
+        try {
+          return ["http:", "https:"].includes(new URL(v).protocol);
+        } catch {
+          return false;
+        }
+      },
+      { message: "url must use http:// or https://" },
+    );
+
 const httpFields = {
   // Restrict to http/https. z.string().url() alone admits file://, which on the
   // agent host turns body_match / json_path into a local-file read+exfil oracle
@@ -93,7 +111,7 @@ const mtlsRefMessage: { message: string; path: (string | number)[] } = {
 export const PrometheusConfigSchema = z
   .object({
     query: nonEmptyString,
-    prometheus_url: z.string().url().optional(),
+    prometheus_url: httpUrl().optional(),
   })
   .strict();
 
@@ -324,7 +342,7 @@ export function isLogQLAggregation(query: string): boolean {
 }
 export const LokiConfigSchema = z
   .object({
-    base_url: z.string().url(),
+    base_url: httpUrl(),
     query: z
       .string()
       .min(1)
@@ -366,7 +384,7 @@ export type LokiConfig = z.infer<typeof LokiConfigSchema>;
 //   api_key → api_key_ref (the base64 id:key; sent as `Authorization: ApiKey <value>`)
 export const EsConfigSchema = z
   .object({
-    base_url: z.string().url(),
+    base_url: httpUrl(),
     index: z.string().min(1).max(256),
     // Full search body: { query?, aggs|aggregations: {...} }. Free-form
     // jsonb; ES parses it. Must contain an aggregation block.
