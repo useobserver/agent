@@ -27,7 +27,7 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
   const ts = (): string => new Date().toISOString();
   const url = config.prometheus_url || env.prometheusUrl;
   if (!url) {
-    return { value: null, timestamp: ts(), status_hint: "no_data", reason: "no_prometheus_url" };
+    return { value: null, timestamp: ts(), status_hint: "no_data", reason: "prometheus_url_missing" };
   }
 
   // Guard the URL construction — a malformed PROMETHEUS_SERVER_URL would throw

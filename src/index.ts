@@ -64,8 +64,10 @@ if (skipSslVerification) {
 }
 
 if (!PROMETHEUS_SERVER_URL) {
-  console.error("[ERROR] PROMETHEUS_SERVER_URL is mandatory.");
-  process.exit(1);
+  console.warn(
+    "[WARN] PROMETHEUS_SERVER_URL not set — prometheus-type metrics will report no_data; " +
+      "active probes (http, tcp, dns, ...) work normally.",
+  );
 }
 if (!AGENT_KEY) {
   console.error("[ERROR] AGENT_KEY is mandatory.");
