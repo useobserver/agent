@@ -13,6 +13,7 @@ export {
   LAG_QUEUE_DEPTH_THRESHOLD,
   LAG_OLDEST_AGE_SECONDS_THRESHOLD,
   UPTIME_PCT_THRESHOLD,
+  UPTIME_MIN_OBSERVATION_SECONDS,
   CLEAR_HYSTERESIS_MS,
 } from "./heartbeat";
 
@@ -35,6 +36,7 @@ export {
   classifyUptimeSignal,
   transition,
   uptimeSecondsToPct,
+  uptimeObservationWindowSeconds,
   classifyStartedAt,
   duplicateSeen,
   duplicateTick,

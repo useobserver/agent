@@ -94,7 +94,6 @@ export async function execute(config: LokiConfig, _env: AgentEnv = {}): Promise<
 
   try {
     const res = await fetch(queryUrl, { headers: headerResult.headers, signal: controller.signal });
-    clearTimeout(timer);
     if (!res.ok) {
       let detail = "";
       try {
@@ -164,7 +163,6 @@ export async function execute(config: LokiConfig, _env: AgentEnv = {}): Promise<
     // matrix or anything unexpected from an instant query.
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: "loki_bad_response", metadata: meta };
   } catch (error) {
-    clearTimeout(timer);
     return {
       value: null,
       timestamp: ts(),
@@ -172,6 +170,10 @@ export async function execute(config: LokiConfig, _env: AgentEnv = {}): Promise<
       reason: classifyHttpError(error),
       metadata: { base_url: config.base_url },
     };
+  } finally {
+    // In finally — not right after fetch resolves — so the abort signal
+    // also covers the body read (res.json/text can hang on a stalled stream).
+    clearTimeout(timer);
   }
 }
 

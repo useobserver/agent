@@ -42,7 +42,9 @@ function evictOldestIfFull(): void {
     const ev = cache.get(oldest.value);
     cache.delete(oldest.value);
     try {
-      void ev?.quit();
+      void ev?.quit().catch(() => {
+        /* fire-and-forget close; a late rejection must not surface */
+      });
     } catch {
       /* best-effort */
     }
@@ -128,8 +130,12 @@ export async function runQuery(
   if (!check.ok || !check.command) {
     return { ok: false, reason: "db_query_not_allowed", detail: check.reason };
   }
-  const client = getClient(dsn, statementTimeoutMs);
   try {
+    // Client acquisition stays INSIDE the try: a malformed DSN makes
+    // ioredis throw synchronously, and that error message can embed the
+    // full connection string (password included). classifyRedisError
+    // maps it to a typed reason and never echoes the driver message.
+    const client = getClient(dsn, statementTimeoutMs);
     // Use ioredis's generic `call` so the command argument list is
     // passed through verbatim. `client.call` accepts the command as
     // the first arg and the remaining args as the command's args.
@@ -143,7 +149,9 @@ export async function runQuery(
 export function resetRedisClientCacheForTests(): void {
   for (const c of cache.values()) {
     try {
-      void c.quit();
+      void c.quit().catch(() => {
+        /* ignore */
+      });
     } catch {
       /* ignore */
     }

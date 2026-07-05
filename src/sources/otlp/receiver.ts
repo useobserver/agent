@@ -237,6 +237,15 @@ export function createOtlpReceiver(opts: OtlpReceiverOptions): OtlpReceiverHandl
         hostname: addr.host,
         port: addr.port,
         fetch: handleRequest,
+        // Server-layer bound on request buffering. Before this, a
+        // chunked body with no Content-Length was fully buffered by
+        // req.text() before the in-handler byte check ran — unbounded
+        // memory growth. The 8 MiB headroom above the handler cap keeps
+        // the handler's Content-Length check as the operative surface
+        // (it 413s AND increments requests_rejected_payload, which
+        // feeds the heartbeat stats); Bun's own 413 only fires for
+        // bodies that also blow past this hard ceiling.
+        maxRequestBodySize: maxBodyBytes + 8 * 1024 * 1024,
       });
     },
     async stop() {
@@ -322,12 +331,16 @@ export function configureOtlpReceiverFromEnv(env: NodeJS.ProcessEnv = process.en
 export async function startOtlpReceiverOnce(): Promise<OtlpReceiverHandle | null> {
   const r = configureOtlpReceiverFromEnv();
   if (!r) return null;
-  if (singletonStartPromise) {
-    await singletonStartPromise;
-    return r;
+  const inFlight = singletonStartPromise ?? (singletonStartPromise = r.start());
+  try {
+    await inFlight;
+  } catch (e) {
+    // A failed start (EADDRINUSE, bad listen addr at bind time) must not
+    // poison the singleton forever: clear the cached promise so the next
+    // tick retries. Successful starts keep the in-flight dedupe.
+    if (singletonStartPromise === inFlight) singletonStartPromise = null;
+    throw e;
   }
-  singletonStartPromise = r.start();
-  await singletonStartPromise;
   return r;
 }
 

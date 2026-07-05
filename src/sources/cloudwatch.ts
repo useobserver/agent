@@ -100,6 +100,14 @@ function buildClient(config: CloudwatchConfig): CloudWatchClient {
     // via the standard retry strategy. Throttling errors retry
     // automatically.
     maxAttempts: 3,
+    // Hard deadlines on the underlying HTTP handler. Without these the
+    // SDK inherits the OS socket defaults and a blackholed endpoint can
+    // hang a probe tick indefinitely. The plain-object options shape is
+    // the SDK-supported (>=3.521.0) equivalent of constructing
+    // NodeHttpHandler({ connectionTimeout, requestTimeout }) — used here
+    // because @smithy/node-http-handler is not directly resolvable from
+    // this workspace (transitive-only under Bun's isolated linker).
+    requestHandler: { connectionTimeout: 5_000, requestTimeout: 15_000 },
     credentials: config.role_arn
       ? fromTemporaryCredentials({
           params: {

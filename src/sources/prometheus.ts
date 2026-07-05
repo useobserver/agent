@@ -53,7 +53,6 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
 
   try {
     const res = await fetch(queryUrl, { headers, signal: controller.signal });
-    clearTimeout(timer);
     if (!res.ok) {
       return { value: null, timestamp: ts(), status_hint: "no_data", reason: classifyHttpError(null, res.status) };
     }
@@ -62,14 +61,36 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
     if (!Array.isArray(result) || result.length === 0 || !result[0].value) {
       return { value: null, timestamp: ts(), status_hint: "no_data", reason: "no_data_for_query" };
     }
+    // An instant query returning more than one series is ambiguous —
+    // picking result[0] silently renders an arbitrary series as truth.
+    // Mirror the loki source: typed no_data reason instead.
+    if (result.length > 1) {
+      return {
+        value: null,
+        timestamp: ts(),
+        status_hint: "no_data",
+        reason: "prom_multiple_series",
+        metadata: { series: result.length },
+      };
+    }
     const [tstamp, value] = result[0].value;
+    const num = parseFloat(value);
+    if (!Number.isFinite(num)) {
+      return { value: null, timestamp: ts(), status_hint: "no_data", reason: "no_data_for_query" };
+    }
+    // Guard the sample timestamp: a malformed one must not produce an
+    // Invalid Date ISO string downstream. Fall back to now.
+    const tsNum = parseFloat(tstamp);
     return {
-      value: parseFloat(value),
-      timestamp: new Date(parseFloat(tstamp) * 1000).toISOString(),
+      value: num,
+      timestamp: Number.isFinite(tsNum) ? new Date(tsNum * 1000).toISOString() : ts(),
     };
   } catch (error) {
-    clearTimeout(timer);
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: classifyHttpError(error) };
+  } finally {
+    // In finally — not right after fetch resolves — so the abort signal
+    // also covers the body read (res.json can hang on a stalled stream).
+    clearTimeout(timer);
   }
 }
 

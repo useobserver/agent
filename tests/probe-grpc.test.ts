@@ -187,6 +187,33 @@ describe("execute — metadata (auth)", () => {
   });
 });
 
+describe("execute — invalid metadata never leaks the value", () => {
+  it("newline in a metadata value → grpc_metadata_invalid with no token text anywhere", async () => {
+    const SECRET = "Bearer sup3r-s3cret\ntoken";
+    // No server needed: the metadata guard fires before any connection
+    // is attempted (and before the client is even constructed).
+    const r = await grpcSource.execute(cfg(59999, { metadata: { authorization: SECRET } }));
+    expect(r.status_hint).toBe("no_data");
+    expect(r.reason).toBe("grpc_metadata_invalid");
+    expect(r.value).toBeNull();
+    const flat = JSON.stringify(r);
+    expect(flat).not.toContain("sup3r-s3cret");
+    expect(flat).not.toContain("illegal characters");
+  });
+
+  it("schema rejects metadata values with CR/LF/control characters", () => {
+    expect(
+      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer a\nb" } }),
+    ).not.toBeNull();
+    expect(
+      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer a\rb" } }),
+    ).not.toBeNull();
+    expect(
+      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer abc123" } }),
+    ).toBeNull();
+  });
+});
+
 describe("execute — no secret leakage on the error path", () => {
   it("does not surface the gRPC error detail (server-controlled text) in metadata", async () => {
     const SECRET = "Bearer s3cr3t-token";

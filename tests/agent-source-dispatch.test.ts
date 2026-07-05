@@ -52,19 +52,57 @@ describe("dispatch", () => {
   it("legacy fallback: prometheus row with top-level query but empty source_config still routes", async () => {
     // We cannot exercise the actual prometheus runtime without a server,
     // but we can assert that validateConfig sees a query (not the empty
-    // source_config) by checking the failure mode is no_prometheus_url
+    // source_config) by checking the failure mode is prometheus_url_missing
     // rather than invalid_config.
     const r = await sources.execute(
       { id: "m1", source_type: "prometheus", source_config: {}, query: "up" },
-      {} // env without prometheusUrl → reason should be no_prometheus_url, not invalid_config
+      {} // env without prometheusUrl → reason should be prometheus_url_missing, not invalid_config
     );
     expect(r.status_hint).toBe("no_data");
-    expect(r.reason).toBe("no_prometheus_url");
+    expect(r.reason).toBe("prometheus_url_missing");
   });
 
   it("default source_type is prometheus when omitted", async () => {
     const r = await sources.execute({ id: "m1", source_config: { query: "up" } }, {});
     expect(r.status_hint).toBe("no_data");
-    expect(r.reason).toBe("no_prometheus_url");
+    expect(r.reason).toBe("prometheus_url_missing");
+  });
+
+  it("backstop: a source whose execute throws → source_threw, no error text surfaced", async () => {
+    const original = sources.SOURCES.tcp;
+    sources.SOURCES.tcp = {
+      validateConfig: () => null,
+      execute: async () => {
+        throw new Error("boom postgres://user:SECRETPASS@host/db");
+      },
+    };
+    try {
+      const r = await sources.execute({ id: "m1", source_type: "tcp", source_config: { host: "x", port: 1 } });
+      expect(r.status_hint).toBe("no_data");
+      expect(r.reason).toBe("source_threw");
+      expect(r.value).toBeNull();
+      expect(r.metadata?.source_type).toBe("tcp");
+      expect(JSON.stringify(r)).not.toContain("SECRETPASS");
+      expect(JSON.stringify(r)).not.toContain("boom");
+    } finally {
+      sources.SOURCES.tcp = original;
+    }
+  });
+
+  it("backstop: a source whose execute throws synchronously → source_threw", async () => {
+    const original = sources.SOURCES.tcp;
+    sources.SOURCES.tcp = {
+      validateConfig: () => null,
+      execute: () => {
+        throw new Error("sync boom");
+      },
+    };
+    try {
+      const r = await sources.execute({ id: "m1", source_type: "tcp", source_config: { host: "x", port: 1 } });
+      expect(r.status_hint).toBe("no_data");
+      expect(r.reason).toBe("source_threw");
+    } finally {
+      sources.SOURCES.tcp = original;
+    }
   });
 });

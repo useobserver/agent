@@ -101,10 +101,35 @@ export function transition(
 }
 
 // Convert agent_uptime_seconds_24h (0..86400) to a pct integer (0..100).
-export function uptimeSecondsToPct(uptimeSeconds24h: number): number {
+//
+// windowSeconds is the *observation* window: min(24h, time since the
+// agent's first-ever heartbeat). Dividing a young agent's heartbeat
+// minutes by the full 86400 makes 100% unreachable until the agent is
+// 24h old — a 1h-old agent with perfect heartbeats would read 4% and
+// trip the uptime_degraded alert. Callers that don't know the
+// observation window (old call sites, old data) get the legacy full-day
+// denominator.
+export function uptimeSecondsToPct(uptimeSeconds24h: number, windowSeconds: number = 86_400): number {
   if (!Number.isFinite(uptimeSeconds24h) || uptimeSeconds24h <= 0) return 0;
-  if (uptimeSeconds24h >= 86_400) return 100;
-  return Math.floor((uptimeSeconds24h * 100) / 86_400);
+  const window = Number.isFinite(windowSeconds)
+    ? Math.min(Math.max(windowSeconds, 60), 86_400)
+    : 86_400;
+  if (uptimeSeconds24h >= window) return 100;
+  return Math.floor((uptimeSeconds24h * 100) / window);
+}
+
+// Observation window for the 24h uptime figure: seconds since the
+// agent's first-ever heartbeat, clamped to [60, 86400]. Null/invalid
+// first_heartbeat_at (agent predates the column, or first heartbeat is
+// this very request) yields the 60s floor so minute-bucket granularity
+// can't produce >100%.
+export function uptimeObservationWindowSeconds(
+  firstHeartbeatAt: string | Date | null | undefined,
+  nowMs: number,
+): number {
+  const ms = firstHeartbeatAt == null ? null : new Date(firstHeartbeatAt).getTime();
+  if (ms == null || !Number.isFinite(ms) || ms >= nowMs) return 60;
+  return Math.min(Math.max(Math.floor((nowMs - ms) / 1000), 60), 86_400);
 }
 
 // ---------------------------------------------------------------------------

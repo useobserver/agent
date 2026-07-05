@@ -185,6 +185,22 @@ function runCheck(config: GrpcConfig, creds: grpc.ChannelCredentials): Promise<C
   const timeoutMs = config.timeout_ms ?? 5_000;
   const target = `${config.host}:${config.port}`;
   return new Promise<CheckOutcome>((resolve) => {
+    // Build call metadata BEFORE creating the client. grpc-js throws on
+    // illegal metadata keys/values with a message that embeds the FULL
+    // value — which per the schema docs is an auth token. That message
+    // must never escape runCheck (it would land in logs), so we guard
+    // the construction and return a typed reason with NO detail. The
+    // client is only created after the metadata is known-good, so
+    // there is nothing to leak (or close) on this path.
+    let md: grpc.Metadata;
+    try {
+      md = new grpc.Metadata();
+      for (const [k, v] of Object.entries(config.metadata ?? {})) md.set(k, v);
+    } catch {
+      resolve({ ok: false, reason: "grpc_metadata_invalid" });
+      return;
+    }
+
     let client: InstanceType<typeof HealthClient>;
     try {
       client = new HealthClient(target, creds);
@@ -192,8 +208,6 @@ function runCheck(config: GrpcConfig, creds: grpc.ChannelCredentials): Promise<C
       resolve({ ok: false, reason: "grpc_error", detail: (e as Error).message });
       return;
     }
-    const md = new grpc.Metadata();
-    for (const [k, v] of Object.entries(config.metadata ?? {})) md.set(k, v);
 
     const start = Date.now();
     const deadline = new Date(start + timeoutMs);

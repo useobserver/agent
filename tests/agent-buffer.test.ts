@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBuffer } from "../src/buffer";
@@ -100,5 +100,69 @@ describe("agent buffer", () => {
     buf = createBuffer(bufferPath);
     expect(buf.size()).toBe(0);
     expect(buf.oldestAgeSeconds()).toBe(0);
+  });
+});
+
+describe("corrupt buffer file recovery", () => {
+  it("quarantines a garbage (non-SQLite) file and recreates an empty working buffer", () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      writeFileSync(bufferPath, "this is not a sqlite database, just garbage bytes ".repeat(4));
+      buf = createBuffer(bufferPath);
+
+      // Recovered: empty buffer, fully functional.
+      expect(buf.size()).toBe(0);
+      expect(buf.enqueue({ metric_id: "m1", value: 1 })).toEqual({ dropped: 0, size: 1 });
+      const { value: rows } = buf.batches(10).next();
+      expect(JSON.parse(rows[0].payload)).toEqual({ metric_id: "m1", value: 1 });
+
+      // The corrupt original was moved aside, not deleted.
+      const quarantined = readdirSync(tmpDir).filter((f) => /^buffer\.db\.corrupt-\d+$/.test(f));
+      expect(quarantined.length).toBe(1);
+
+      // Loud error was logged.
+      expect(errSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(String(errSpy.mock.calls[0][0])).toContain("corrupt");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("recovered buffer persists across close + reopen", () => {
+    writeFileSync(bufferPath, "garbage garbage garbage garbage garbage garbage!");
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      buf = createBuffer(bufferPath);
+    } finally {
+      errSpy.mockRestore();
+    }
+    buf.enqueue({ metric_id: "m1", value: 7 });
+    buf.close();
+    buf = createBuffer(bufferPath);
+    expect(buf.size()).toBe(1);
+  });
+});
+
+describe("post-close behavior", () => {
+  it("close() is idempotent; post-close calls no-op instead of resurrecting the DB", () => {
+    buf = createBuffer(bufferPath);
+    buf.enqueue({ metric_id: "m1" });
+    buf.close();
+    buf.close(); // idempotent — must not throw
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // enqueue drops instead of reopening; warns once only.
+      expect(buf.enqueue({ metric_id: "m2" })).toEqual({ dropped: 1, size: 0 });
+      expect(buf.enqueue({ metric_id: "m3" })).toEqual({ dropped: 1, size: 0 });
+      expect(warnSpy.mock.calls.length).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(buf.size()).toBe(0);
+    expect(buf.oldestAgeSeconds()).toBe(0);
+    expect(buf.batches(10).next().done).toBe(true);
+    buf.ack(1); // no-op, must not throw
   });
 });

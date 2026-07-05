@@ -10,7 +10,9 @@
 // variable on the list goes through maskValue() (always — even
 // non-sensitive entries are partially masked so accidental sharing of
 // the dashboard UI never reveals a full token). Anything off the list
-// is invisible to the dashboard regardless of name.
+// is invisible to the dashboard regardless of name, and
+// DEBUG_DASHBOARD_TOKEN — the dashboard's own bearer token — is never
+// rendered at all, not even masked.
 //
 // Memory: ~5MB. CPU at idle: near zero. The dashboard polls every 5s.
 // The agent main loop is unaffected.
@@ -54,11 +56,19 @@ function isAllowed(key: string): boolean {
   return false;
 }
 
+// Values under 20 chars are fully masked — first4+last4 on a 9-char
+// password would reveal 8 of its 9 characters. Longer values keep a
+// 4+2 hint (enough to tell two keys apart, never enough to recover).
 function maskValue(value: string): string {
   if (!value) return "";
-  if (value.length <= 8) return "****";
-  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+  if (value.length < 20) return "****";
+  return `${value.slice(0, 4)}…${value.slice(-2)}`;
 }
+
+// Never rendered, not even masked: the dashboard's own bearer token.
+// It matches the /^DEBUG_DASHBOARD_/ allowlist entry, but displaying
+// any part of it would leak the credential that protects this page.
+const HIDDEN_ENV_KEYS = new Set(["DEBUG_DASHBOARD_TOKEN"]);
 
 export function maskEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
@@ -67,7 +77,7 @@ export function maskEnv(env: NodeJS.ProcessEnv): Record<string, string> {
     if (!isAllowed(k)) continue;
     const v = env[k];
     if (typeof v !== "string") continue;
-    out[k] = maskValue(v);
+    out[k] = HIDDEN_ENV_KEYS.has(k) ? "•hidden•" : maskValue(v);
   }
   return out;
 }
@@ -541,6 +551,12 @@ export function startDashboard(opts: DashboardOptions): DashboardServer {
   const server = Bun.serve({
     port,
     hostname,
+    // Never serve Bun's development error page — it renders stack
+    // traces (paths, env hints) to whoever can reach the port.
+    development: false,
+    error() {
+      return new Response("Internal Server Error", { status: 500 });
+    },
     fetch(req) {
       const url = new URL(req.url);
       // Health check stays open; everything else requires the bearer token
@@ -557,13 +573,26 @@ export function startDashboard(opts: DashboardOptions): DashboardServer {
         });
       }
       if (url.pathname === "/api/state") {
-        const snap = opts.state.getSnapshot();
-        return new Response(JSON.stringify(snap), {
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-store",
-          },
-        });
+        // A broken snapshot provider (e.g. a corrupt buffer throwing
+        // from size()) must not kill the state endpoint with a stack
+        // trace — degrade to a minimal JSON error instead.
+        try {
+          const snap = opts.state.getSnapshot();
+          return new Response(JSON.stringify(snap), {
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": "no-store",
+            },
+          });
+        } catch {
+          return new Response(JSON.stringify({ error: "snapshot_failed" }), {
+            status: 500,
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": "no-store",
+            },
+          });
+        }
       }
       if (url.pathname === "/healthz") {
         return new Response("ok", {

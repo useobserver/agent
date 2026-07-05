@@ -223,7 +223,23 @@ export async function execute(metricDef: MetricDefinition, env: AgentEnv = {}): 
     };
   }
 
-  return await source.execute(config, env);
+  // Backstop for the "sources never throw" contract. A per-source miss
+  // (sync throw or rejected promise) must not escape the dispatcher —
+  // and the error message must not be surfaced either, since driver /
+  // fetch errors can embed DSNs, tokens, or URLs with credentials. The
+  // scheduler's recordOutcome surfaces the typed reason; nothing is
+  // logged here.
+  try {
+    return await source.execute(config, env);
+  } catch {
+    return {
+      value: null,
+      timestamp: ts(),
+      status_hint: "no_data",
+      reason: "source_threw",
+      metadata: { source_type: sourceType },
+    };
+  }
 }
 
 /**

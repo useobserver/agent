@@ -69,6 +69,21 @@ const httpFields = {
         }
       },
       { message: "url must use http:// or https://" },
+    )
+    // No userinfo credentials in the URL. A https://user:pass@host URL
+    // embeds a secret in source_config (which the cloud persists) AND
+    // can leak via error messages that echo the URL. Use the headers
+    // field with an env-var-ref pattern instead.
+    .refine(
+      (v) => {
+        try {
+          const u = new URL(v);
+          return u.username === "" && u.password === "";
+        } catch {
+          return false;
+        }
+      },
+      { message: "url must not contain credentials (user:pass@); use headers for auth" },
     ),
   method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]).default("GET"),
   expected_status: z.union([z.number().int().min(100).max(599), z.array(z.number().int().min(100).max(599)).min(1)]).default(200),
@@ -137,6 +152,9 @@ export const DnsConfigSchema = z
     record_type: z.enum(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", "PTR"]).default("A"),
     expected_value: z.string().optional(),
     resolver: z.string().optional(),
+    // Hard deadline per DNS transaction (c-ares Resolver timeout). Without
+    // it a blackholed resolver leaves the probe hanging on the OS default.
+    timeout_ms: timeoutMs.default(5_000),
   })
   .strict();
 
@@ -210,7 +228,18 @@ export const GrpcConfigSchema = z
     client_cert_ref: envVarRef.optional(),
     client_key_ref: envVarRef.optional(),
     ca_cert_ref: envVarRef.optional(),
-    metadata: z.record(z.string(), z.string()).optional(),
+    // Values restricted to printable ASCII (no CR/LF/control chars):
+    // grpc-js throws on illegal characters with an error message that
+    // embeds the full value — an auth token. The agent also guards at
+    // runtime (grpc_metadata_invalid); this is the save-time belt.
+    metadata: z
+      .record(
+        z.string(),
+        z
+          .string()
+          .regex(/^[\x20-\x7E]*$/, "metadata values must be printable ASCII without newlines or control characters"),
+      )
+      .optional(),
     timeout_ms: z.number().int().min(100).max(30_000).default(5_000),
     interpretation: z.enum(["health_state", "latency"]).default("health_state"),
   })

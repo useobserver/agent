@@ -26,6 +26,10 @@ export interface PgQueryFailure {
 }
 
 const MAX_POOL = 2;
+// Client-side deadline slack on top of the server-side statement_timeout.
+// The server timeout should always fire first; the race is the backstop
+// for network partitions where the server response never arrives.
+const RACE_SLACK_MS = 2_000;
 
 // Per-(dsn, statement_timeout_ms) Sql client cache. The dsn is hashed
 // before being used as a key so the connection string never appears
@@ -49,7 +53,9 @@ function evictOldestIfFull(): void {
     const ev = cache.get(oldest.value);
     cache.delete(oldest.value);
     try {
-      void ev?.end({ timeout: 1 });
+      void ev?.end({ timeout: 1 }).catch(() => {
+        /* fire-and-forget close; a late rejection must not surface */
+      });
     } catch {
       /* best-effort */
     }
@@ -80,6 +86,10 @@ function getClient(dsn: string, statementTimeoutMs: number): ReturnType<typeof p
       statement_timeout: String(statementTimeoutMs),
       application_name: "observer-agent",
     } as unknown) as { statement_timeout?: number; application_name?: string },
+    // Client-side TCP/TLS connect deadline (seconds). Without it a
+    // blackholed endpoint hangs the probe until the OS gives up —
+    // statement_timeout only covers the query, not the handshake.
+    connect_timeout: Math.max(1, Math.ceil(Math.min(statementTimeoutMs, 5_000) / 1000)),
     // Don't auto-prepare; we run one-shot queries.
     prepare: false,
     // Idle connections close after 10s so we don't hold connections
@@ -108,14 +118,38 @@ export async function runQuery(
   if (!Number.isFinite(statementTimeoutMs) || statementTimeoutMs <= 0) {
     return { ok: false, reason: "db_invalid_timeout", detail: String(statementTimeoutMs) };
   }
-  const sql = getClient(dsn, statementTimeoutMs);
+  let raceTimer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Client acquisition stays INSIDE the try: a malformed DSN makes the
+    // driver throw synchronously, and that error message can embed the
+    // full connection string (password included). classifyPgError maps
+    // it to a typed reason and never echoes the driver message.
+    const sql = getClient(dsn, statementTimeoutMs);
     // postgres.js exposes a tag function for parameterized queries.
     // The probe contract takes a verbatim query string with no
     // interpolation, so we use the `.unsafe` escape hatch. The query
     // is operator-supplied configuration; SELECT-only and read-only
     // safeguards live at the dispatch layer above us.
-    const rows = (await sql.unsafe(query)) as unknown as Array<Record<string, unknown>>;
+    //
+    // Client-side deadline: statement_timeout is server-side only — a
+    // network partition after connect leaves the promise hanging. Race
+    // against statementTimeoutMs + slack; on loss, detach the abandoned
+    // query promise so its eventual rejection can't go unhandled.
+    const queryPromise = sql.unsafe(query) as unknown as Promise<Array<Record<string, unknown>>>;
+    const timedOut = Symbol("timeout");
+    const raced = await Promise.race([
+      queryPromise,
+      new Promise<typeof timedOut>((resolve) => {
+        raceTimer = setTimeout(() => resolve(timedOut), statementTimeoutMs + RACE_SLACK_MS);
+      }),
+    ]);
+    if (raced === timedOut) {
+      Promise.resolve(queryPromise).catch(() => {
+        /* abandoned after client-side deadline */
+      });
+      return { ok: false, reason: "db_timeout" };
+    }
+    const rows = raced as Array<Record<string, unknown>>;
     if (!Array.isArray(rows) || rows.length === 0) {
       return { ok: false, reason: "db_empty_result" };
     }
@@ -134,6 +168,8 @@ export async function runQuery(
     return coerceNumeric(raw, rows.length, cols.length);
   } catch (err) {
     return classifyPgError(err);
+  } finally {
+    clearTimeout(raceTimer);
   }
 }
 
@@ -187,7 +223,9 @@ function classifyPgError(err: unknown): PgQueryFailure {
 export function resetPgClientCacheForTests(): void {
   for (const c of cache.values()) {
     try {
-      void c.end({ timeout: 1 });
+      void c.end({ timeout: 1 }).catch(() => {
+        /* ignore */
+      });
     } catch {
       /* ignore */
     }

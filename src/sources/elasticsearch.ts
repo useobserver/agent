@@ -133,7 +133,6 @@ export async function execute(config: EsConfig, _env: AgentEnv = {}): Promise<Pr
 
   try {
     const res = await fetch(url, { method: "POST", headers: headerResult.headers, body, signal: controller.signal });
-    clearTimeout(timer);
     if (!res.ok) {
       let detail = "";
       try {
@@ -169,7 +168,6 @@ export async function execute(config: EsConfig, _env: AgentEnv = {}): Promise<Pr
     }
     return { value: extracted.value, timestamp: ts(), metadata: meta };
   } catch (error) {
-    clearTimeout(timer);
     return {
       value: null,
       timestamp: ts(),
@@ -177,6 +175,10 @@ export async function execute(config: EsConfig, _env: AgentEnv = {}): Promise<Pr
       reason: classifyHttpError(error),
       metadata: { base_url: config.base_url, index: config.index },
     };
+  } finally {
+    // In finally — not right after fetch resolves — so the abort signal
+    // also covers the body read (res.json/text can hang on a stalled stream).
+    clearTimeout(timer);
   }
 }
 

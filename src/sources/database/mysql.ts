@@ -25,6 +25,10 @@ export interface MyQueryFailure {
 
 const MAX_POOL = 2;
 const MAX_CACHE_ENTRIES = 32;
+// Client-side deadline slack on top of the server-side MAX_EXECUTION_TIME.
+// The server timeout should always fire first; the race is the backstop
+// for network partitions where the server response never arrives.
+const RACE_SLACK_MS = 2_000;
 
 const cache = new Map<string, mysql.Pool>();
 
@@ -43,7 +47,9 @@ function evictOldestIfFull(): void {
     const ev = cache.get(oldest.value);
     cache.delete(oldest.value);
     try {
-      void ev?.end();
+      void ev?.end().catch(() => {
+        /* fire-and-forget close; a late rejection must not surface */
+      });
     } catch {
       /* best-effort */
     }
@@ -84,9 +90,23 @@ export async function runQuery(
   query: string,
   statementTimeoutMs: number,
 ): Promise<MyQueryResult | MyQueryFailure> {
-  const pool = getPool(dsn, statementTimeoutMs);
+  // We Math.trunc rather than `| 0` because the bitwise OR coerces
+  // NaN / Infinity / non-finite numbers to 0 — and MAX_EXECUTION_TIME=0
+  // DISABLES the timeout in MySQL, which would defeat the safeguard.
+  // Hard-fail on non-finite so a configuration bug surfaces as a
+  // probe error rather than an unbounded query.
+  if (!Number.isFinite(statementTimeoutMs) || statementTimeoutMs <= 0) {
+    return { ok: false, reason: "db_invalid_timeout", detail: String(statementTimeoutMs) };
+  }
   let connection: mysql.PoolConnection | null = null;
+  let raceTimer: ReturnType<typeof setTimeout> | undefined;
+  let timedOutAbandoned = false;
   try {
+    // Pool acquisition stays INSIDE the try: a malformed DSN makes
+    // mysql2 throw synchronously, and that error message can embed the
+    // full connection string (password included). classifyMyError maps
+    // it to a typed reason and never echoes the driver message.
+    const pool = getPool(dsn, statementTimeoutMs);
     connection = await pool.getConnection();
     // Enforce statement timeout at the session level. MAX_EXECUTION_TIME
     // applies to SELECT only and is itself in milliseconds. We set
@@ -94,18 +114,30 @@ export async function runQuery(
     // the pool with the session variable in place but that's fine —
     // every probe uses the same statement_timeout_ms within its
     // cache key.
-    //
-    // We Math.trunc rather than `| 0` because the bitwise OR coerces
-    // NaN / Infinity / non-finite numbers to 0 — and MAX_EXECUTION_TIME=0
-    // DISABLES the timeout in MySQL, which would defeat the safeguard.
-    // Hard-fail on non-finite so a configuration bug surfaces as a
-    // probe error rather than an unbounded query.
-    if (!Number.isFinite(statementTimeoutMs) || statementTimeoutMs <= 0) {
-      return { ok: false, reason: "db_invalid_timeout", detail: String(statementTimeoutMs) };
-    }
     const clampedTimeout = Math.max(1, Math.trunc(statementTimeoutMs));
     await connection.query(`SET SESSION MAX_EXECUTION_TIME = ${clampedTimeout}`);
-    const [rows] = await connection.query(query);
+    // Client-side deadline: MAX_EXECUTION_TIME is server-side only — a
+    // network partition after connect leaves the promise hanging. Race
+    // against statementTimeoutMs + slack; on loss, detach the abandoned
+    // query promise so its eventual rejection can't go unhandled, and
+    // destroy (not release) the connection since it has an in-flight
+    // query and can't safely return to the pool.
+    const queryPromise = connection.query(query);
+    const timedOut = Symbol("timeout");
+    const raced = await Promise.race([
+      queryPromise,
+      new Promise<typeof timedOut>((resolve) => {
+        raceTimer = setTimeout(() => resolve(timedOut), statementTimeoutMs + RACE_SLACK_MS);
+      }),
+    ]);
+    if (raced === timedOut) {
+      timedOutAbandoned = true;
+      Promise.resolve(queryPromise).catch(() => {
+        /* abandoned after client-side deadline */
+      });
+      return { ok: false, reason: "db_timeout" };
+    }
+    const [rows] = raced as Awaited<typeof queryPromise>;
     if (!Array.isArray(rows) || rows.length === 0) {
       return { ok: false, reason: "db_empty_result" };
     }
@@ -125,8 +157,15 @@ export async function runQuery(
   } catch (err) {
     return classifyMyError(err);
   } finally {
+    clearTimeout(raceTimer);
     try {
-      connection?.release();
+      if (timedOutAbandoned) {
+        // In-flight query still owns the wire; releasing would hand a
+        // protocol-desynced connection to the next probe.
+        connection?.destroy();
+      } else {
+        connection?.release();
+      }
     } catch {
       /* ignore */
     }
@@ -186,7 +225,9 @@ function classifyMyError(err: unknown): MyQueryFailure {
 export function resetMyClientCacheForTests(): void {
   for (const p of cache.values()) {
     try {
-      void p.end();
+      void p.end().catch(() => {
+        /* ignore */
+      });
     } catch {
       /* ignore */
     }

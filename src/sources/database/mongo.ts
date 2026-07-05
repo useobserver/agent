@@ -44,7 +44,9 @@ function evictOldestIfFull(): void {
     const ev = cache.get(oldest.value);
     cache.delete(oldest.value);
     try {
-      void ev?.close(true);
+      void ev?.close(true).catch(() => {
+        /* fire-and-forget close; a late rejection must not surface */
+      });
     } catch {
       /* best-effort */
     }
@@ -108,8 +110,13 @@ export async function runQuery(
   if (!check.ok || !check.spec) {
     return { ok: false, reason: "db_query_not_allowed", detail: check.reason };
   }
-  const client = getClient(dsn, statementTimeoutMs);
   try {
+    // Client acquisition stays INSIDE the try: a malformed DSN makes
+    // the MongoClient constructor throw synchronously, and that error
+    // message can embed the full connection string (password included).
+    // classifyMongoError maps it to a typed reason and never echoes the
+    // driver message.
+    const client = getClient(dsn, statementTimeoutMs);
     await client.connect();
     const collection = client.db(check.spec.db).collection(check.spec.collection);
     // maxTimeMS makes the server abort the count when the deadline
@@ -130,7 +137,9 @@ export async function runQuery(
 export function resetMongoClientCacheForTests(): void {
   for (const c of cache.values()) {
     try {
-      void c.close(true);
+      void c.close(true).catch(() => {
+        /* ignore */
+      });
     } catch {
       /* ignore */
     }

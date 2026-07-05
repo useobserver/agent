@@ -28,19 +28,25 @@ function flattenRecords(records: unknown): string[] {
 export async function execute(config: DnsConfig): Promise<ProbeResult> {
   const ts = (): string => new Date().toISOString();
   const recordType: RecordType = config.record_type || "A";
+  const timeoutMs = config.timeout_ms ?? 5_000;
 
-  let resolver: typeof dnsModule.promises | dnsModule.promises.Resolver;
-  if (config.resolver) {
-    const r = new dnsModule.promises.Resolver();
-    r.setServers([config.resolver]);
-    resolver = r;
-  } else {
-    resolver = dnsModule.promises;
+  // Always construct a Resolver (never bare dnsModule.promises): it is
+  // the only way to put a hard deadline on the DNS transaction. Without
+  // `timeout` a blackholed resolver hangs the probe on the OS default.
+  // setServers throws synchronously (TypeError) on a malformed resolver
+  // address — guard it so the "sources never throw" contract holds and
+  // the operator gets a typed reason instead of a dispatcher backstop.
+  let resolver: dnsModule.promises.Resolver;
+  try {
+    resolver = new dnsModule.promises.Resolver({ timeout: timeoutMs, tries: 2 });
+    if (config.resolver) resolver.setServers([config.resolver]);
+  } catch {
+    return { value: null, timestamp: ts(), status_hint: "no_data", reason: "dns_resolver_invalid" };
   }
 
   const start = Date.now();
   try {
-    const records = await (resolver as dnsModule.promises.Resolver).resolve(config.domain, recordType);
+    const records = await resolver.resolve(config.domain, recordType);
     const elapsed = Date.now() - start;
     if (config.expected_value) {
       const flat = flattenRecords(records);

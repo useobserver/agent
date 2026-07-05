@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBuffer } from "../src/buffer";
-import { createDrainController } from "../src/drain";
+import { createDrainController, POISON_PILL_MAX_TRANSIENT_FAILURES } from "../src/drain";
 
 // local queue lag + drain controller.
 //
@@ -179,5 +179,80 @@ describe("drain controller — cloud-outage simulation", () => {
     const r = await ctrl.drainOnce();
     expect(r).toEqual({ acked: 0, dropped: 0, paused: false });
     expect(ctrl.currentBackoffMs()).toBe(5);
+  });
+});
+
+describe("drain controller — poison-pill dead-letter", () => {
+  it("drops a head row after the transient-failure cap so the next row proceeds", async () => {
+    buf = createBuffer(bufferPath);
+    buf.enqueue({ metric_id: "poison" });
+    buf.enqueue({ metric_id: "good" });
+
+    const sent = [];
+    const logs = [];
+    const post = async (payload) => {
+      if (payload.metric_id === "poison") {
+        const err = new Error("500");
+        err.response = { status: 500 };
+        throw err;
+      }
+      sent.push(payload);
+    };
+    const ctrl = createDrainController({
+      buffer: buf,
+      post,
+      backoffMinMs: 1,
+      backoffMaxMs: 4,
+      log: (level, message) => logs.push({ level, message }),
+    });
+
+    // Every tick below the cap fails transiently and pauses — the
+    // poison row blocks the queue exactly as before.
+    for (let i = 0; i < POISON_PILL_MAX_TRANSIENT_FAILURES - 1; i += 1) {
+      const r = await ctrl.drainOnce();
+      expect(r.paused).toBe(true);
+      expect(r.acked).toBe(0);
+      expect(r.dropped).toBe(0);
+    }
+    expect(buf.size()).toBe(2);
+    expect(sent).toEqual([]);
+
+    // Cap tick: poison row is ack-and-dropped with an ERROR log, and
+    // the row behind it flows in the same tick.
+    const r = await ctrl.drainOnce();
+    expect(r.dropped).toBe(1);
+    expect(r.acked).toBe(1);
+    expect(r.paused).toBe(false);
+    expect(buf.size()).toBe(0);
+    expect(sent).toEqual([{ metric_id: "good" }]);
+
+    const errLog = logs.find((l) => l.level === "ERROR");
+    expect(errLog).toBeDefined();
+    expect(errLog.message).toContain("metric_id=poison");
+    expect(errLog.message).toContain("500");
+  });
+
+  it("counter clears on success: recovery before the cap acks the row, no drop", async () => {
+    buf = createBuffer(bufferPath);
+    buf.enqueue({ metric_id: "m1" });
+    let cloudUp = false;
+    const post = async () => {
+      if (!cloudUp) {
+        const err = new Error("503");
+        err.response = { status: 503 };
+        throw err;
+      }
+    };
+    const ctrl = createDrainController({ buffer: buf, post, backoffMinMs: 1, backoffMaxMs: 2 });
+
+    for (let i = 0; i < 5; i += 1) {
+      const r = await ctrl.drainOnce();
+      expect(r.paused).toBe(true);
+    }
+    cloudUp = true;
+    const r = await ctrl.drainOnce();
+    expect(r.acked).toBe(1);
+    expect(r.dropped).toBe(0);
+    expect(buf.size()).toBe(0);
   });
 });

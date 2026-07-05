@@ -38,6 +38,17 @@ const DROP_STATUSES = new Set([400, 404, 409, 422]);
 
 const FENCE_WARN_INTERVAL_MS = 5 * 60 * 1_000;
 
+// Poor man's dead-letter: a head-of-line row that fails "transient"
+// (5xx / network) on every attempt would otherwise block every newer
+// row forever — the drain always retries the queue head first. After
+// this many CONSECUTIVE transient failures of the SAME head row, it is
+// ack-and-dropped with an ERROR log so the queue keeps moving. The
+// counter is per-row and cleared on ack/drop, and with backoff capped
+// at 5 min, 20 attempts is well over an hour of retrying — a genuine
+// cloud outage loses at most one row per ~hour, while a poison pill
+// stops blocking the queue the same day it appears.
+export const POISON_PILL_MAX_TRANSIENT_FAILURES = 20;
+
 function classify(error: unknown): ClassifiedError {
   const e = error as { response?: { status?: number }; status?: number } | null | undefined;
   const status = e?.response?.status ?? e?.status;
@@ -62,6 +73,10 @@ export function createDrainController(options: DrainOptions): DrainController {
 
   let backoffMs = backoffMinMs;
   let lastFenceWarnAtMs = 0;
+  // rowId → consecutive transient-failure count. Only head-of-line rows
+  // ever accumulate (the drain pauses on the first transient failure),
+  // and entries are cleared on ack/drop, so this stays tiny.
+  const transientFailures = new Map<number, number>();
 
   async function drainOnce(): Promise<DrainTickResult> {
     if (buffer.size() === 0) {
@@ -79,12 +94,14 @@ export function createDrainController(options: DrainOptions): DrainController {
           const msg = parseError instanceof Error ? parseError.message : String(parseError);
           log("WARN", `Buffer row id=${row.id} unparseable; dropping. ${msg}`);
           buffer.ack(row.id);
+          transientFailures.delete(row.id);
           dropped += 1;
           continue;
         }
         try {
           await post(payload);
           buffer.ack(row.id);
+          transientFailures.delete(row.id);
           acked += 1;
         } catch (error) {
           const c = classify(error);
@@ -102,9 +119,30 @@ export function createDrainController(options: DrainOptions): DrainController {
               log("WARN", `Cloud rejected payload (HTTP ${c.status}); dropping row id=${row.id}.`);
             }
             buffer.ack(row.id);
+            transientFailures.delete(row.id);
             dropped += 1;
             continue;
           }
+          // Transient failure — normally retry-with-backoff, but a row
+          // that keeps failing transiently at the head of the queue is
+          // a poison pill: drop it after the cap so newer rows flow.
+          const failures = (transientFailures.get(row.id) ?? 0) + 1;
+          if (failures >= POISON_PILL_MAX_TRANSIENT_FAILURES) {
+            transientFailures.delete(row.id);
+            const metricId =
+              payload != null && typeof payload === "object" && "metric_id" in payload
+                ? String((payload as { metric_id?: unknown }).metric_id)
+                : "unknown";
+            log(
+              "ERROR",
+              `Buffer row id=${row.id} (metric_id=${metricId}) failed ${failures} consecutive transient attempts ` +
+                `(last: HTTP ${c.status ?? "network error"}); dropping it to unblock the queue.`,
+            );
+            buffer.ack(row.id);
+            dropped += 1;
+            continue;
+          }
+          transientFailures.set(row.id, failures);
           backoffMs = Math.min(backoffMs * 2, backoffMaxMs);
           return { acked, dropped, paused: true };
         }

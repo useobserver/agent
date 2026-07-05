@@ -57,4 +57,9 @@ export interface HealthAlertState {
 export const LAG_QUEUE_DEPTH_THRESHOLD = 1000;
 export const LAG_OLDEST_AGE_SECONDS_THRESHOLD = 300;
 export const UPTIME_PCT_THRESHOLD = 95;
+// Minimum observation window before uptime_degraded may open. Below
+// this, minute-bucket rounding over a tiny window makes the pct too
+// noisy to alert on (and an operator mid-install would get paged for
+// a process they started two minutes ago).
+export const UPTIME_MIN_OBSERVATION_SECONDS = 3_600;
 export const CLEAR_HYSTERESIS_MS = 60_000;

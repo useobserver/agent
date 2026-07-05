@@ -112,6 +112,14 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
       if (!followRedirects || res.status < 300 || res.status >= 400 || hop >= MAX_REDIRECTS) break;
       const loc = res.headers.get("location");
       if (!loc) break;
+      // We're about to follow — this intermediate response's body is
+      // never read. Cancel it so the connection returns to the pool
+      // instead of idling until GC.
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* ignore */
+      }
       const next = new URL(loc, currentUrl);
       if (next.origin !== origin0) reqHeaders = {}; // strip headers cross-origin
       currentUrl = next.toString();
@@ -119,6 +127,11 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
     const elapsed = Date.now() - start;
 
     if (!expected.includes(res.status)) {
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* ignore */
+      }
       return {
         value: null,
         timestamp: ts(),
@@ -287,7 +300,11 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
         reason: code || "mtls_handshake_failed",
       };
     }
-    const reason = code || e?.message || "http_error";
+    // Typed codes only — never fall back to e.message. A fetch error
+    // message can echo the request URL, which may carry userinfo
+    // credentials (schema now rejects those, but stale/out-of-band
+    // configs can still reach here). Mirrors the mTLS branch above.
+    const reason = code || "http_error";
     return { value: null, timestamp: ts(), status_hint: "no_data", reason };
   } finally {
     clearTimeout(timer);
