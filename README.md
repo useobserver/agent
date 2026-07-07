@@ -8,6 +8,10 @@
   <a href="https://docs.use.observer/agent"><img src="https://img.shields.io/badge/Documentation-link-blue?style=for-the-badge" alt="Documentation link"></a>
 </p>
 
+<p align="center">
+  <a href="https://status.use.observer"><img src="https://status.use.observer/badge.svg?style=for-the-badge" alt="Observer Cloud live status"></a>
+</p>
+
 # Observer Agent
 
 The data-plane companion to [Observer](https://use.observer). The agent
@@ -49,7 +53,7 @@ reachable Prometheus, or a placeholder if you have none yet.
 ### Docker
 
 ```bash
-docker run --env-file .env ghcr.io/useobserver/agent:1.1.0
+docker run --env-file .env ghcr.io/useobserver/agent:1
 ```
 
 The debug dashboard binds to `127.0.0.1` inside the container, so
