@@ -15,6 +15,12 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 COPY src ./src
 COPY tsconfig.json ./
+# Build provenance (agent 1.5.0+): CI writes build-info.json (channel
+# "official", commit, source_hash) before the docker build; the agent reads
+# it at boot and reports it on every heartbeat. The [n] glob makes the COPY
+# a no-op for local builds without the stamp — the agent then self-reports
+# channel "source".
+COPY build-info.jso[n] ./
 
 FROM oven/bun:1.3.6-distroless
 

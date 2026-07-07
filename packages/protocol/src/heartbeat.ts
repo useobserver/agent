@@ -44,6 +44,22 @@ export interface HeartbeatPayload {
   // custom probes registered on the agent. Optional; omitted
   // when none are registered (and by older agents).
   custom_probes?: CustomProbeDescriptor[];
+  // Build provenance (agent 1.5.0+). SELF-REPORTED — a fork can send
+  // anything here, so this is telemetry for honest users, never a trust
+  // boundary. channel: "official" (build-info.json baked by the public
+  // image CI), "source" (running from a checkout, hash computed at boot).
+  build?: AgentBuildInfo;
+}
+
+export interface AgentBuildInfo {
+  channel: "official" | "source";
+  // git commit the official image was built from; null for source runs.
+  commit: string | null;
+  // sha256 over the sorted relative paths + contents of src/ — computed
+  // identically at image-build time (official) and at boot (source), so
+  // a patched official image or a modified checkout reports a hash that
+  // differs from the published one for that version.
+  source_hash: string;
 }
 
 export interface HealthAlertState {

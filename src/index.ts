@@ -9,6 +9,7 @@ import { startDashboard, maskEnv } from "./dashboard.ts";
 import { getOtlpReceiver } from "./sources/otlp/receiver.ts";
 import sources from "./sources/index.ts";
 import { describeCustomProbes } from "./sources/custom/registry.ts";
+import { getBuildInfo } from "./build-info.ts";
 import { evaluate } from "./evaluator.ts";
 import type {
   DashboardSnapshot,
@@ -295,19 +296,26 @@ async function fetchMetricDefinitions(): Promise<MetricDefinition[]> {
 
 // ───────────────────────── Cloud post + drain ─────────────────────────
 
-const postOneToCloud = async (metricData: MetricSamplePayload): Promise<unknown> => {
+const postBatchToCloud = async (payloads: unknown[]): Promise<unknown> => {
   try {
-    const res = await cloudFetch("/api/agent/receiver", {
+    const res = await cloudFetch("/api/agent/receiver/batch", {
       method: "POST",
-      body: JSON.stringify(metricData),
+      body: JSON.stringify(payloads),
     });
-    // Ack body unused — cancel so the socket frees for reuse.
-    res.body?.cancel().catch(() => {});
-    counters.pushes += 1;
+    // Parse the per-row contract ({accepted, rejected:[{index,field,code}]})
+    // so the drain can log server-side rejects. Older clouds return an array
+    // of inserted rows — json() still succeeds and the drain ignores it.
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      // 200 with an unparseable body is still a successful post.
+    }
+    counters.pushes += payloads.length;
     lastPostAt = new Date().toISOString();
     lastPostOk = true;
     lastPostError = null;
-    return res;
+    return body;
   } catch (error) {
     lastPostAt = new Date().toISOString();
     lastPostOk = false;
@@ -326,7 +334,7 @@ const sendMetricsToCloudServer = (metricData: MetricSamplePayload): void => {
 
 const drainController = createDrainController({
   buffer,
-  post: (payload) => postOneToCloud(payload as MetricSamplePayload),
+  post: (payloads) => postBatchToCloud(payloads),
   log: (level, msg) => log(level, msg),
 });
 
@@ -385,6 +393,7 @@ const sendHeartbeat = async (): Promise<void> => {
       source_types_active: [...activeSourceTypes],
       ...(otlpStats ? { otlp_stats: otlpStats } : {}),
       custom_probes: customProbes,
+      build: getBuildInfo(),
     };
     const res = await cloudFetch("/api/agent/heartbeat", { method: "POST", body: JSON.stringify(payload) });
     res.body?.cancel().catch(() => {});

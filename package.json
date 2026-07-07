@@ -1,6 +1,6 @@
 {
   "name": "observer-agent",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Observer agent: probes metric sources, pushes results to Observer Cloud.",
   "main": "src/index.ts",
   "type": "module",

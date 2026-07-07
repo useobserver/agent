@@ -78,13 +78,14 @@ describe("drain controller — cloud-outage simulation", () => {
 
     let cloudUp = false;
     const sent = [];
-    const post = async (payload) => {
+    // Batch contract (1.5.0): post receives an ARRAY of payloads.
+    const post = async (payloads) => {
       if (!cloudUp) {
         const err = new Error("ECONNREFUSED");
         err.code = "ECONNREFUSED";
         throw err;
       }
-      sent.push(payload);
+      sent.push(...payloads);
     };
 
     const ctrl = createDrainController({ buffer: buf, post, backoffMinMs: 1, backoffMaxMs: 16 });
@@ -138,18 +139,19 @@ describe("drain controller — cloud-outage simulation", () => {
     expect(ctrl.currentBackoffMs()).toBe(8);
   });
 
-  it("drain drops a 4xx-rejected row and continues without escalating backoff", async () => {
+  it("per-row server rejects are dropped; accepted rows ack; no backoff escalation", async () => {
     buf = createBuffer(bufferPath);
     buf.enqueue({ metric_id: "bad" });
     buf.enqueue({ metric_id: "good" });
     const sent = [];
-    const post = async (payload) => {
-      if (payload.metric_id === "bad") {
-        const err = new Error("400");
-        err.response = { status: 400 };
-        throw err;
-      }
-      sent.push(payload);
+    // Production /receiver/batch contract: 200 with {accepted, rejected[]}.
+    const post = async (payloads) => {
+      sent.push(...payloads);
+      const rejected = payloads
+        .map((p, i) => ({ p, i }))
+        .filter(({ p }) => p.metric_id === "bad")
+        .map(({ i }) => ({ index: i, field: "value", code: "not_finite" }));
+      return { accepted: payloads.length - rejected.length, rejected };
     };
     const ctrl = createDrainController({ buffer: buf, post, backoffMinMs: 1, backoffMaxMs: 8 });
     const r = await ctrl.drainOnce();
@@ -157,8 +159,25 @@ describe("drain controller — cloud-outage simulation", () => {
     expect(r.acked).toBe(1);
     expect(r.paused).toBe(false);
     expect(buf.size()).toBe(0);
-    expect(sent).toEqual([{ metric_id: "good" }]);
-    // No backoff escalation for 4xx.
+    // No backoff escalation for per-row rejects.
+    expect(ctrl.currentBackoffMs()).toBe(1);
+  });
+
+  it("whole-batch 4xx drops the batch and continues without escalating backoff", async () => {
+    buf = createBuffer(bufferPath);
+    buf.enqueue({ metric_id: "bad1" });
+    buf.enqueue({ metric_id: "bad2" });
+    const post = async () => {
+      const err = new Error("400");
+      err.response = { status: 400 };
+      throw err;
+    };
+    const ctrl = createDrainController({ buffer: buf, post, backoffMinMs: 1, backoffMaxMs: 8 });
+    const r = await ctrl.drainOnce();
+    expect(r.dropped).toBe(2);
+    expect(r.acked).toBe(0);
+    expect(r.paused).toBe(false);
+    expect(buf.size()).toBe(0);
     expect(ctrl.currentBackoffMs()).toBe(1);
   });
 
@@ -190,13 +209,13 @@ describe("drain controller — poison-pill dead-letter", () => {
 
     const sent = [];
     const logs = [];
-    const post = async (payload) => {
-      if (payload.metric_id === "poison") {
+    const post = async (payloads) => {
+      if (payloads.some((p) => p.metric_id === "poison")) {
         const err = new Error("500");
         err.response = { status: 500 };
         throw err;
       }
-      sent.push(payload);
+      sent.push(...payloads);
     };
     const ctrl = createDrainController({
       buffer: buf,
