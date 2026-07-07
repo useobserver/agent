@@ -8,10 +8,6 @@
   <a href="https://docs.use.observer/agent"><img src="https://img.shields.io/badge/Documentation-link-blue?style=for-the-badge" alt="Documentation link"></a>
 </p>
 
-<p align="center">
-  <a href="https://status.use.observer"><img src="https://status.use.observer/badge.svg" alt="Observer Cloud live status"></a>
-</p>
-
 # Observer Agent
 
 The data-plane companion to [Observer](https://use.observer). The agent
