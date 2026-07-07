@@ -11,8 +11,8 @@ name: Build + push agent image to GHCR
 #   - manual workflow_dispatch
 #
 # Image: ghcr.io/<owner>/agent — owner is the public repo owner
-# (useobserver). Tags emitted: latest (main), <branch>, sha-<short>,
-# semver / major.minor / major (on agent-v* tag pushes).
+# (useobserver). Tags emitted: latest (main push AND agent-v* tag push),
+# <branch>, sha-<short>, semver / major.minor / major (on agent-v* tag pushes).
 
 on:
   push:
@@ -27,7 +27,10 @@ on:
         default: "true"
 
 permissions:
-  contents: read
+  # contents:write — the tag-push path publishes a GitHub Release carrying
+  # build-info.json (the per-release source-hash manifest the cloud compares
+  # heartbeats against).
+  contents: write
   packages: write
 
 env:
@@ -48,6 +51,29 @@ jobs:
         run: |
           OWNER="${{ github.repository_owner }}"
           echo "value=${OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      # Build provenance stamp (agent 1.5.0+). Runs the agent's OWN hash
+      # implementation (src/build-info.ts computeSourceHash) so the baked
+      # value can never drift from what a source run computes at boot.
+      # `import type` lines are erased by Bun, so no install is needed.
+      - name: Stamp build provenance
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.6
+      - name: Write build-info.json
+        run: |
+          bun -e '
+            const { computeSourceHash } = await import("./src/build-info.ts");
+            const pkg = JSON.parse(await Bun.file("package.json").text());
+            const info = {
+              channel: "official",
+              version: pkg.version,
+              commit: process.env.GITHUB_SHA ?? null,
+              source_hash: computeSourceHash("./src"),
+            };
+            await Bun.write("build-info.json", JSON.stringify(info, null, 2) + "\n");
+            console.log(JSON.stringify(info));
+          '
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -84,6 +110,7 @@ jobs:
             type=match,pattern=agent-v(\d+\.\d+),group=1
             type=match,pattern=agent-v(\d+),group=1
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/agent-v') }}
           labels: |
             org.opencontainers.image.title=Observer Agent
             org.opencontainers.image.description=Probes metric sources, pushes results to Observer Cloud.
@@ -103,6 +130,19 @@ jobs:
           cache-to: type=gha,mode=max,scope=agent
           provenance: false
           sbom: false
+
+      # Per-release hash manifest: the cloud's daily agent-release tick
+      # downloads this asset and marks heartbeats whose official hash does
+      # not match the published one for their version as "modified".
+      - name: Publish release manifest (tag builds)
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "Observer agent $TAG" --verify-tag
+          gh release upload "$TAG" build-info.json --clobber
 
       - name: Summarise image
         run: |
