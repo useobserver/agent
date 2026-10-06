@@ -11,8 +11,11 @@ name: Build + push agent image to GHCR
 #   - manual workflow_dispatch
 #
 # Image: ghcr.io/<owner>/agent — owner is the public repo owner
-# (useobserver). Tags emitted: latest (main push AND agent-v* tag push),
-# <branch>, sha-<short>, semver / major.minor / major (on agent-v* tag pushes).
+# (useobserver). Tags emitted:
+#   - main push:      main, sha-<short>
+#   - agent-v* tag:   <x.y.z>, <x.y>, <x>, latest, sha-<short>
+# `latest` moves ONLY on release tags, never on a default-branch push, so
+# an unreleased main commit can never reach consumers of `:latest`.
 
 on:
   push:
@@ -44,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compute image owner
         id: owner
@@ -76,10 +79,10 @@ jobs:
           '
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Resolve push flag
         id: push
@@ -92,7 +95,7 @@ jobs:
 
       - name: Login to GHCR
         if: steps.push.outputs.value == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -100,25 +103,29 @@ jobs:
 
       - name: Compute image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/${{ env.IMAGE_NAME }}
+          # Disable the action's implicit `latest` (it would otherwise add
+          # one on default-branch pushes); `latest` is set explicitly below
+          # for agent-v* tags only.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-,format=short
             type=match,pattern=agent-v(\d+\.\d+\.\d+),group=1
             type=match,pattern=agent-v(\d+\.\d+),group=1
             type=match,pattern=agent-v(\d+),group=1
-            type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/agent-v') }}
           labels: |
             org.opencontainers.image.title=Observer Agent
             org.opencontainers.image.description=Probes metric sources, pushes results to Observer Cloud.
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.licenses=ISC
+            org.opencontainers.image.licenses=Apache-2.0
 
       - name: Build + push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
