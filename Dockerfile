@@ -22,13 +22,27 @@ COPY tsconfig.json ./
 # channel "source".
 COPY build-info.jso[n] ./
 
+# /data holds the SQLite buffer (BUFFER_PATH below) and the heartbeat relay
+# queue next to it. Distroless has no shell to mkdir in, so create it here.
+# Owned by 65532 (distroless "nonroot") with group 0 so the image also works
+# under runAsUser 65532 / arbitrary-uid-with-gid-0 platforms; the default
+# root user can write it regardless. A named volume mounted on /data inherits
+# this ownership on first use.
+RUN mkdir -p /data && chown 65532:0 /data && chmod 0770 /data
+
 FROM oven/bun:1.3.6-distroless
 
 WORKDIR /app
 
 COPY --from=builder /repo /app
+COPY --from=builder --chown=65532:0 /data /data
 
 ENV NODE_ENV=production
+# Keep the buffer on the /data volume (mount one there), so queued samples
+# survive container recreation. The heartbeat relay queue follows it
+# (/data/observer-agent-buffer-relay.db). Non-container runs keep the binary
+# default (./observer-agent-buffer.db).
+ENV BUFFER_PATH=/data/observer-agent-buffer.db
 ENV DEBUG_DASHBOARD_PORT=10101
 ENV ENABLE_DEBUG_DASHBOARD=true
 

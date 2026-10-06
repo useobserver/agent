@@ -24,10 +24,26 @@ export {
   CLOUDWATCH_STATISTIC_VALUES,
   CLOUDWATCH_PERIOD_VALUES,
   ManualConfigSchema,
+  HeartbeatConfigSchema,
+  HEARTBEAT_PERIOD_MIN_SECONDS,
+  HEARTBEAT_PERIOD_MAX_SECONDS,
+  HEARTBEAT_GRACE_MAX_SECONDS,
+  HEARTBEAT_RUNTIME_MAX_SECONDS,
+  HEARTBEAT_GRACE_DEFAULT_SECONDS,
   CustomConfigSchema,
   LokiConfigSchema,
   EsConfigSchema,
   HostConfigSchema,
+  HEADER_NAME_MAX_LENGTH,
+  HEADER_REFS_MAX_ENTRIES,
+  isValidHeaderName,
+  isCredentialHeaderName,
+  credentialHeaderMessage,
+  GRPC_METADATA_KEY_MAX_LENGTH,
+  METADATA_REFS_MAX_ENTRIES,
+  grpcMetadataKeyProblem,
+  isValidGrpcMetadataKey,
+  credentialMetadataMessage,
 } from "./schemas";
 
 export type {
@@ -44,6 +60,7 @@ export type {
   OtlpConfig,
   CloudwatchConfig,
   ManualConfig,
+  HeartbeatConfig,
   CustomConfig,
   LokiConfig,
   EsConfig,
@@ -64,3 +81,17 @@ export {
   type ExtractResult,
   type ExtractFailure,
 } from "./json-path";
+
+export {
+  checkDatabaseQuery,
+  checkSelectOnly,
+  checkRedisCommand,
+  checkMongoQuery,
+  REDIS_ALLOWED_COMMANDS,
+  type DatabaseKind,
+  type QueryCheckResult,
+  type RedisCheckResult,
+  type MongoCheckResult,
+  type MongoOp,
+  type MongoSpec,
+} from "./database";

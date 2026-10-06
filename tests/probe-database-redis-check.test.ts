@@ -1,7 +1,7 @@
 // Redis command allowlist parser tests.
 
 import { describe, expect, it } from "bun:test";
-import { checkRedisCommand, REDIS_ALLOWED_COMMANDS } from "../src/sources/database/_redis-check.ts";
+import { checkRedisCommand, REDIS_ALLOWED_COMMANDS } from "@observer/probe-config";
 
 describe("checkRedisCommand — accepts", () => {
   it("DBSIZE", () => {

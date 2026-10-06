@@ -10,7 +10,7 @@
 
 import crypto from "node:crypto";
 import { Redis } from "ioredis";
-import { checkRedisCommand } from "./_redis-check.ts";
+import { checkRedisCommand } from "@observer/probe-config";
 
 export interface RedisQueryResult {
   ok: true;
@@ -68,6 +68,10 @@ function getClient(dsn: string, statementTimeoutMs: number): Redis {
     lazyConnect: true,
     connectTimeout: Math.min(statementTimeoutMs, 5_000),
     commandTimeout: statementTimeoutMs,
+    // ioredis 6 defaults to RESP3 (HELLO 3), which Redis < 6 rejects and
+    // which changes reply shapes for some commands. Probes target arbitrary
+    // customer servers, so stay on the RESP2 wire protocol.
+    protocol: 2,
   });
   // Swallow connection errors so unexpected disconnects don't bring
   // down the agent. Errors surface via runQuery's catch.

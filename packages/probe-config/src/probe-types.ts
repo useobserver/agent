@@ -20,6 +20,9 @@ export const PROBE_TYPES = Object.freeze([
   "elasticsearch",
   "host",
   "manual",
+  // Cloud-evaluated, agentless: jobs ping a per-check URL and the cloud
+  // flags them late / failed (apps/web lib/heartbeat).
+  "heartbeat",
 ] as const);
 
 export type ProbeType = (typeof PROBE_TYPES)[number];

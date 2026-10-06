@@ -18,6 +18,7 @@ export type {
   SourceType,
   MetricDefinition,
   HeartbeatPayload,
+  HeartbeatResponse,
   MetricSamplePayload,
 } from "@observer/protocol";
 
@@ -121,4 +122,15 @@ export interface DashboardSnapshot {
     level: string;
     message: string;
   }>;
+  /** Heartbeat relay state (HEARTBEAT_RELAY_ENABLED); counters since start. */
+  heartbeat_relay?: {
+    enabled: boolean;
+    listening?: string | null;
+    queue_depth?: number;
+    forward_backoff_ms?: number;
+    queued?: number;
+    rejected_rate_limited?: number;
+    rejected_invalid?: number;
+    enqueue_failures?: number;
+  };
 }

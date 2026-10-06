@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
-import buffer from "./buffer.ts";
+import buffer, { createBuffer } from "./buffer.ts";
 import { createDrainController } from "./drain.ts";
 import { startDashboard, maskEnv } from "./dashboard.ts";
 import { getOtlpReceiver } from "./sources/otlp/receiver.ts";
@@ -11,15 +11,28 @@ import sources from "./sources/index.ts";
 import { describeCustomProbes } from "./sources/custom/registry.ts";
 import { getBuildInfo } from "./build-info.ts";
 import { evaluate } from "./evaluator.ts";
+import { createDefinitionsRefresher } from "./definitions-refresh.ts";
+import { DEFINITIONS_VERSION_HEADER, HEARTBEAT_RELAY_CLOUD_PATH, type HeartbeatRelayBatch } from "@observer/protocol";
+import {
+  createRelayForwarder,
+  createRelayHandler,
+  describeRelayBind,
+  resolveRelayConfig,
+  startRelayServer,
+  type RelayServer,
+} from "./heartbeat-relay.ts";
 import type {
+  BufferAccess,
   DashboardSnapshot,
+  DrainController,
   HeartbeatPayload,
+  HeartbeatResponse,
   MetricDefinition,
   MetricSamplePayload,
 } from "./types.ts";
 
 // Defaults.
-const DEFAULT_CLOUD_SERVER_URL = "https://localhost:3000";
+const DEFAULT_CLOUD_SERVER_URL = "https://use.observer";
 const DEFAULT_PROMETHEUS_BASIC_AUTH_ENABLED = "true";
 const DEFAULT_PROMETHEUS_USERNAME = "admin";
 const DEFAULT_PROMETHEUS_PASSWORD = "";
@@ -171,6 +184,7 @@ function getSnapshot(): DashboardSnapshot {
     definitions: Array.from(definitionState.entries()).map(([id, s]) => ({ id, ...s })),
     active_source_types: [...activeSourceTypes],
     recent_logs: recentLogs.slice(-20),
+    heartbeat_relay: relaySnapshot(),
   };
 }
 
@@ -281,17 +295,17 @@ async function cloudFetch(path: string, init: RequestInit = {}): Promise<Respons
 
 // ───────────────────────── Metric definitions ────────────────────────
 
-async function fetchMetricDefinitions(): Promise<MetricDefinition[]> {
-  try {
-    const res = await cloudFetch("/api/agent/metrics-definitions", { method: "GET" });
-    const data = (await res.json()) as MetricDefinition[];
-    log("INFO", `Successfully fetched metric definitions (${data.length})`);
-    return data;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    handleError("Error fetching metric definitions: " + msg, error);
-    throw error;
-  }
+// Errors propagate to the definitions refresher, which reports them via
+// handleError and backs off (see definitions-refresh.ts).
+async function fetchMetricDefinitions(): Promise<{ definitions: MetricDefinition[]; version: string | null }> {
+  const res = await cloudFetch("/api/agent/metrics-definitions", { method: "GET" });
+  const data = (await res.json()) as unknown;
+  if (!Array.isArray(data)) throw new Error("metric definitions response is not an array");
+  // Clouds that predate the change signal omit the header; the refresher
+  // then falls back to the heartbeat version / periodic poll.
+  const version = res.headers.get(DEFINITIONS_VERSION_HEADER);
+  log("INFO", `Successfully fetched metric definitions (${data.length})`);
+  return { definitions: data as MetricDefinition[], version: version && version.length > 0 ? version : null };
 }
 
 // ───────────────────────── Cloud post + drain ─────────────────────────
@@ -338,7 +352,7 @@ const drainController = createDrainController({
   log: (level, msg) => log(level, msg),
 });
 
-const startDrainLoop = (): void => {
+const runDrainLoop = (controller: DrainController, label: string): void => {
   // Penalty backoff for ticks that THROW (corrupt buffer, closed DB) —
   // drainOnce's own backoff only grows on the transient-post path, so a
   // persistently-throwing tick would otherwise hot-loop at 1s, spamming
@@ -346,18 +360,20 @@ const startDrainLoop = (): void => {
   let tickPenaltyMs = 0;
   const tick = async (): Promise<void> => {
     try {
-      await drainController.drainOnce();
+      await controller.drainOnce();
       tickPenaltyMs = 0;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      handleError("Buffer drain error: " + msg, error);
+      handleError(`${label} drain error: ` + msg, error);
       tickPenaltyMs = Math.min(tickPenaltyMs === 0 ? 1_000 : tickPenaltyMs * 2, 300_000);
     }
     const jitter = Math.random() * 500;
-    setTimeout(tick, drainController.currentBackoffMs() + tickPenaltyMs + jitter);
+    setTimeout(tick, controller.currentBackoffMs() + tickPenaltyMs + jitter);
   };
   tick();
 };
+
+const startDrainLoop = (): void => runDrainLoop(drainController, "Buffer");
 
 // ───────────────────────── Heartbeat ─────────────────────────────────
 
@@ -396,10 +412,20 @@ const sendHeartbeat = async (): Promise<void> => {
       build: getBuildInfo(),
     };
     const res = await cloudFetch("/api/agent/heartbeat", { method: "POST", body: JSON.stringify(payload) });
-    res.body?.cancel().catch(() => {});
     lastHeartbeatAt = new Date().toISOString();
     lastHeartbeatOk = true;
     lastHeartbeatError = null;
+    // Change signal: newer clouds return the assigned definitions' version;
+    // a mismatch with the last fetch triggers an immediate re-fetch. The
+    // body is best-effort: an unparseable or field-less response (older
+    // cloud) just leaves the periodic poll in charge.
+    let body: HeartbeatResponse | null = null;
+    try {
+      body = (await res.json()) as HeartbeatResponse;
+    } catch {
+      body = null;
+    }
+    definitionsRefresher.noteRemoteVersion(body?.definitions_version);
   } catch (error) {
     lastHeartbeatAt = new Date().toISOString();
     lastHeartbeatOk = false;
@@ -595,174 +621,116 @@ function definitionHash(d: MetricDefinition): string {
   ]);
 }
 
-const startMetricPolling = async (): Promise<void> => {
-  const pollDefinitions = async (): Promise<void> => {
-    try {
-      const metricDefinitions = await fetchMetricDefinitions();
+// Reconcile running probe jobs with the definitions the cloud returned.
+// Throws only on unexpected internal errors; the refresher reports those
+// and retries with backoff.
+const applyDefinitions = async (metricDefinitions: MetricDefinition[]): Promise<void> => {
+  activeSourceTypes.clear();
+  for (const def of metricDefinitions) {
+    activeSourceTypes.add(def.source_type || "prometheus");
+  }
 
-      activeSourceTypes.clear();
-      for (const def of metricDefinitions) {
-        activeSourceTypes.add(def.source_type || "prometheus");
+  // Lazy-start the CloudWatch work poller only when a cloudwatch
+  // source actually exists — polling /api/agent/work every 5s from
+  // every agent in the fleet is pure overhead otherwise. Idempotent
+  // via the started flag; never stopped once running (a metric-type
+  // flip away and back shouldn't churn the poller).
+  if (activeSourceTypes.has("cloudwatch")) {
+    startCloudwatchWorkPoller();
+  }
+
+  const seenIds = new Set<string>();
+  for (const definition of metricDefinitions) {
+    const {
+      id,
+      interval,
+      interval_agent_push,
+      healthy_operation,
+      healthy_value,
+      unhealthy_operation,
+      unhealthy_value,
+    } = definition;
+
+    seenIds.add(id);
+
+    // Diff-based rebuild: identical probe-relevant fields → keep the
+    // running jobs (timer phase + dedup state intact). Only changed
+    // definitions get torn down and recreated.
+    const hash = definitionHash(definition);
+    const existing = metricJobs.get(id);
+    if (existing && existing.defHash === hash) {
+      continue;
+    }
+    if (existing) {
+      existing.pollingJob.stop();
+      existing.pushJob.stop();
+      metricJobs.delete(id);
+    }
+    const thresholdFields = {
+      healthy_operation: (healthy_operation as string) ?? null,
+      healthy_value: healthy_value != null ? Number(healthy_value) : null,
+      unhealthy_operation: (unhealthy_operation as string) ?? null,
+      unhealthy_value: unhealthy_value != null ? Number(unhealthy_value) : null,
+    };
+    if (!definitionState.has(id)) {
+      definitionState.set(id, {
+        source_type: definition.source_type ?? "prometheus",
+        interval_minutes: interval,
+        push_interval_minutes: interval_agent_push,
+        last_status: null,
+        last_value: null,
+        last_at: null,
+        last_reason: null,
+        ...thresholdFields,
+      });
+    } else {
+      const s = definitionState.get(id)!;
+      s.source_type = definition.source_type ?? "prometheus";
+      s.interval_minutes = interval;
+      s.push_interval_minutes = interval_agent_push;
+      s.healthy_operation = thresholdFields.healthy_operation;
+      s.healthy_value = thresholdFields.healthy_value;
+      s.unhealthy_operation = thresholdFields.unhealthy_operation;
+      s.unhealthy_value = thresholdFields.unhealthy_value;
+    }
+
+    const state: MetricJobEntry["state"] = { lastStatus: null };
+    const label = probeLabel(definition);
+    const runProbe = () => sources.execute(definition, sourceEnv());
+
+    const recordOutcome = (status: string, value: number | null, ts: string, reason: string | null): void => {
+      const s = definitionState.get(id);
+      if (!s) return;
+      s.last_status = status;
+      s.last_value = value;
+      s.last_at = ts;
+      s.last_reason = reason;
+      if (definition.source_type === "prometheus" || !definition.source_type) {
+        lastPromProbeAt = ts;
+        lastPromProbeOutcome = status === "no_data" ? "no_data" : "success";
       }
+    };
 
-      // Lazy-start the CloudWatch work poller only when a cloudwatch
-      // source actually exists — polling /api/agent/work every 5s from
-      // every agent in the fleet is pure overhead otherwise. Idempotent
-      // via the started flag; never stopped once running (a metric-type
-      // flip away and back shouldn't churn the poller).
-      if (activeSourceTypes.has("cloudwatch")) {
-        startCloudwatchWorkPoller();
-      }
-
-      const seenIds = new Set<string>();
-      for (const definition of metricDefinitions) {
-        const {
-          id,
-          interval,
-          interval_agent_push,
-          healthy_operation,
-          healthy_value,
-          unhealthy_operation,
-          unhealthy_value,
-        } = definition;
-
-        seenIds.add(id);
-
-        // Diff-based rebuild: identical probe-relevant fields → keep the
-        // running jobs (timer phase + dedup state intact). Only changed
-        // definitions get torn down and recreated.
-        const hash = definitionHash(definition);
-        const existing = metricJobs.get(id);
-        if (existing && existing.defHash === hash) {
-          continue;
-        }
-        if (existing) {
-          existing.pollingJob.stop();
-          existing.pushJob.stop();
-          metricJobs.delete(id);
-        }
-        const thresholdFields = {
-          healthy_operation: (healthy_operation as string) ?? null,
-          healthy_value: healthy_value != null ? Number(healthy_value) : null,
-          unhealthy_operation: (unhealthy_operation as string) ?? null,
-          unhealthy_value: unhealthy_value != null ? Number(unhealthy_value) : null,
-        };
-        if (!definitionState.has(id)) {
-          definitionState.set(id, {
-            source_type: definition.source_type ?? "prometheus",
-            interval_minutes: interval,
-            push_interval_minutes: interval_agent_push,
-            last_status: null,
-            last_value: null,
-            last_at: null,
-            last_reason: null,
-            ...thresholdFields,
-          });
-        } else {
-          const s = definitionState.get(id)!;
-          s.source_type = definition.source_type ?? "prometheus";
-          s.interval_minutes = interval;
-          s.push_interval_minutes = interval_agent_push;
-          s.healthy_operation = thresholdFields.healthy_operation;
-          s.healthy_value = thresholdFields.healthy_value;
-          s.unhealthy_operation = thresholdFields.unhealthy_operation;
-          s.unhealthy_value = thresholdFields.unhealthy_value;
-        }
-
-        const state: MetricJobEntry["state"] = { lastStatus: null };
-        const label = probeLabel(definition);
-        const runProbe = () => sources.execute(definition, sourceEnv());
-
-        const recordOutcome = (status: string, value: number | null, ts: string, reason: string | null): void => {
-          const s = definitionState.get(id);
-          if (!s) return;
-          s.last_status = status;
-          s.last_value = value;
-          s.last_at = ts;
-          s.last_reason = reason;
-          if (definition.source_type === "prometheus" || !definition.source_type) {
-            lastPromProbeAt = ts;
-            lastPromProbeOutcome = status === "no_data" ? "no_data" : "success";
-          }
-        };
-
-        // Evaluates immediately (jittered) so a new/changed metric — and
-        // every metric after an agent restart — reports within seconds
-        // instead of one full interval later.
-        const pollingJob = scheduleEvery(
-          interval,
-          async () => {
-            counters.evaluations += 1;
-            log("INFO", `Fetching metric: ${label}`);
-            try {
-              const result = await runProbe();
-              // Single evaluation entry point: handles no_data, null, and
-              // non-finite values uniformly (non-finite → no_data, never a
-              // spurious "degraded"). Replaces the inline evaluateStatus + casts.
-              const ev = evaluate(definition, result);
-              if (ev.status === "no_data") {
-                recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
-                if (state.lastStatus !== "no_data") {
-                  // Enqueue BEFORE updating dedup state — if the buffer
-                  // throws (full disk, corrupt db), lastStatus must not
-                  // claim a row that was never queued.
-                  sendMetricsToCloudServer({
-                    metric_id: id,
-                    value: 0,
-                    timestamp: ev.timestamp,
-                    status: "no_data",
-                    reason: ev.reason ?? "no_data",
-                  });
-                  state.lastStatus = "no_data";
-                }
-                return;
-              }
-              recordOutcome(ev.status, ev.value, ev.timestamp, null);
-              if (ev.status !== state.lastStatus || state.lastStatus === null) {
-                sendMetricsToCloudServer({
-                  metric_id: id,
-                  value: ev.value ?? 0,
-                  timestamp: ev.timestamp,
-                  status: ev.status,
-                });
-                state.lastStatus = ev.status;
-              }
-            } catch (error) {
-              const msg = error instanceof Error ? error.message : String(error);
-              handleError(`Unexpected throw from probe ${label}: ${msg}`, error);
-              if (state.lastStatus !== "no_data") {
-                // Guarded: a second throw here (enqueue on a broken
-                // buffer) must not escape to scheduleEvery's catch and
-                // must not corrupt dedup state.
-                try {
-                  sendMetricsToCloudServer({
-                    metric_id: id,
-                    value: 0,
-                    timestamp: new Date().toISOString(),
-                    status: "no_data",
-                    reason: classifyNoDataReason(error),
-                  });
-                  state.lastStatus = "no_data";
-                } catch (enqueueError) {
-                  const m2 = enqueueError instanceof Error ? enqueueError.message : String(enqueueError);
-                  handleError(`Failed to enqueue no_data verdict for ${label}: ${m2}`, enqueueError);
-                }
-              }
-            }
-          },
-          { immediate: true },
-        );
-
-        // Forced push: the cloud-staleness keepalive. MUST emit a row on
-        // every tick — value or not, throw or not — because the cloud's
-        // freshness window (classifyMetricFreshness) is keyed off this
-        // cadence; a silent tick reads as a dead agent.
-        const pushJob = scheduleEvery(interval_agent_push, async () => {
-          try {
-            const result = await runProbe();
-            const ev = evaluate(definition, result);
-            if (ev.status === "no_data") {
-              recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
+    // Evaluates immediately (jittered) so a new/changed metric — and
+    // every metric after an agent restart — reports within seconds
+    // instead of one full interval later.
+    const pollingJob = scheduleEvery(
+      interval,
+      async () => {
+        counters.evaluations += 1;
+        log("INFO", `Fetching metric: ${label}`);
+        try {
+          const result = await runProbe();
+          // Single evaluation entry point: handles no_data, null, and
+          // non-finite values uniformly (non-finite → no_data, never a
+          // spurious "degraded"). Replaces the inline evaluateStatus + casts.
+          const ev = evaluate(definition, result);
+          if (ev.status === "no_data") {
+            recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
+            if (state.lastStatus !== "no_data") {
+              // Enqueue BEFORE updating dedup state — if the buffer
+              // throws (full disk, corrupt db), lastStatus must not
+              // claim a row that was never queued.
               sendMetricsToCloudServer({
                 metric_id: id,
                 value: 0,
@@ -771,9 +739,11 @@ const startMetricPolling = async (): Promise<void> => {
                 reason: ev.reason ?? "no_data",
               });
               state.lastStatus = "no_data";
-              return;
             }
-            recordOutcome(ev.status, ev.value, ev.timestamp, null);
+            return;
+          }
+          recordOutcome(ev.status, ev.value, ev.timestamp, null);
+          if (ev.status !== state.lastStatus || state.lastStatus === null) {
             sendMetricsToCloudServer({
               metric_id: id,
               value: ev.value ?? 0,
@@ -781,11 +751,14 @@ const startMetricPolling = async (): Promise<void> => {
               status: ev.status,
             });
             state.lastStatus = ev.status;
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-            handleError(`Unexpected throw from probe ${label}: ${msg}`, error);
-            // Still emit — forced push refreshes even without a value.
-            // Guarded so a broken buffer can't double-fault out of the job.
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          handleError(`Unexpected throw from probe ${label}: ${msg}`, error);
+          if (state.lastStatus !== "no_data") {
+            // Guarded: a second throw here (enqueue on a broken
+            // buffer) must not escape to scheduleEvery's catch and
+            // must not corrupt dedup state.
             try {
               sendMetricsToCloudServer({
                 metric_id: id,
@@ -797,48 +770,180 @@ const startMetricPolling = async (): Promise<void> => {
               state.lastStatus = "no_data";
             } catch (enqueueError) {
               const m2 = enqueueError instanceof Error ? enqueueError.message : String(enqueueError);
-              handleError(`Failed to enqueue forced-push verdict for ${label}: ${m2}`, enqueueError);
+              handleError(`Failed to enqueue no_data verdict for ${label}: ${m2}`, enqueueError);
             }
           }
-        });
+        }
+      },
+      { immediate: true },
+    );
 
-        metricJobs.set(id, { defHash: hash, pollingJob, pushJob, state });
-      }
-
-      // Drop definitions that disappeared from the cloud: stop their
-      // jobs and dispose any push-mode SourceInstance they held (OTLP
-      // subscription, future receivers). Best-effort: dispose failures
-      // are logged but never block the polling tick.
-      for (const [id, entry] of [...metricJobs.entries()]) {
-        if (!seenIds.has(id)) {
-          entry.pollingJob.stop();
-          entry.pushJob.stop();
-          metricJobs.delete(id);
-          definitionState.delete(id);
-          sources.disposeForMetric(id).catch((e: unknown) => {
-            const msg = e instanceof Error ? e.message : String(e);
-            log("WARN", `dispose push source for ${id} failed: ${msg}`);
+    // Forced push: the cloud-staleness keepalive. MUST emit a row on
+    // every tick — value or not, throw or not — because the cloud's
+    // freshness window (classifyMetricFreshness) is keyed off this
+    // cadence; a silent tick reads as a dead agent.
+    const pushJob = scheduleEvery(interval_agent_push, async () => {
+      try {
+        const result = await runProbe();
+        const ev = evaluate(definition, result);
+        if (ev.status === "no_data") {
+          recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
+          sendMetricsToCloudServer({
+            metric_id: id,
+            value: 0,
+            timestamp: ev.timestamp,
+            status: "no_data",
+            reason: ev.reason ?? "no_data",
           });
+          state.lastStatus = "no_data";
+          return;
+        }
+        recordOutcome(ev.status, ev.value, ev.timestamp, null);
+        sendMetricsToCloudServer({
+          metric_id: id,
+          value: ev.value ?? 0,
+          timestamp: ev.timestamp,
+          status: ev.status,
+        });
+        state.lastStatus = ev.status;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        handleError(`Unexpected throw from probe ${label}: ${msg}`, error);
+        // Still emit — forced push refreshes even without a value.
+        // Guarded so a broken buffer can't double-fault out of the job.
+        try {
+          sendMetricsToCloudServer({
+            metric_id: id,
+            value: 0,
+            timestamp: new Date().toISOString(),
+            status: "no_data",
+            reason: classifyNoDataReason(error),
+          });
+          state.lastStatus = "no_data";
+        } catch (enqueueError) {
+          const m2 = enqueueError instanceof Error ? enqueueError.message : String(enqueueError);
+          handleError(`Failed to enqueue forced-push verdict for ${label}: ${m2}`, enqueueError);
         }
       }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      // Don't exit — cloud may be transiently unreachable. Setinterval
-      // below keeps retrying every 5 min. Heartbeat + dashboard stay
-      // up. Operator sees the failure on the dashboard.
-      handleError("Error fetching metric definitions: " + msg, error);
-    }
-  };
+    });
 
-  await pollDefinitions();
-  setInterval(pollDefinitions, 5 * 60 * 1000);
+    metricJobs.set(id, { defHash: hash, pollingJob, pushJob, state });
+  }
+
+  // Drop definitions that disappeared from the cloud: stop their
+  // jobs and dispose any push-mode SourceInstance they held (OTLP
+  // subscription, future receivers). Best-effort: dispose failures
+  // are logged but never block the polling tick.
+  for (const [id, entry] of [...metricJobs.entries()]) {
+    if (!seenIds.has(id)) {
+      entry.pollingJob.stop();
+      entry.pushJob.stop();
+      metricJobs.delete(id);
+      definitionState.delete(id);
+      sources.disposeForMetric(id).catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        log("WARN", `dispose push source for ${id} failed: ${msg}`);
+      });
+    }
+  }
 };
+
+// When to fetch: change signal from the heartbeat, warm-up polling after
+// start, and the 5-minute backstop (see definitions-refresh.ts). A fetch
+// failure never exits: the cloud may be transiently unreachable, heartbeat
+// and dashboard stay up, and the operator sees the error on the dashboard.
+const definitionsRefresher = createDefinitionsRefresher({
+  fetchAndApply: async () => {
+    const { definitions, version } = await fetchMetricDefinitions();
+    await applyDefinitions(definitions);
+    return { count: definitions.length, version };
+  },
+  onError: (error) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    handleError("Error fetching metric definitions: " + msg, error);
+  },
+  log: (level, message) => {
+    log(level, message);
+  },
+});
+
+// ───────────────────────── Heartbeat relay (opt-in) ───────────────────
+//
+// Jobs without internet egress ping this agent at
+// http://<host>:10102/heartbeat/<token>[/start|/fail|/<exit>]; pings are
+// queued in their own durable SQLite file and forwarded in order to the
+// cloud over the Agent-Key channel. See heartbeat-relay.ts.
+
+const relayConfig = resolveRelayConfig(process.env);
+let relayServer: RelayServer | null = null;
+let relayBuffer: BufferAccess | null = null;
+let relayDrain: DrainController | null = null;
+let relayHandler: ReturnType<typeof createRelayHandler> | null = null;
+
+function relayLog(level: string, message: string): void {
+  if (level === "DEBUG" && !isVerbose) return;
+  log(level, message);
+}
+
+function relaySnapshot(): DashboardSnapshot["heartbeat_relay"] {
+  if (!relayConfig.enabled) return { enabled: false };
+  let depth = 0;
+  try {
+    depth = relayBuffer?.size() ?? 0;
+  } catch {
+    depth = 0;
+  }
+  return {
+    enabled: true,
+    listening: relayServer ? `${relayServer.hostname}:${relayServer.port}` : null,
+    queue_depth: depth,
+    forward_backoff_ms: relayDrain?.currentBackoffMs() ?? 0,
+    ...(relayHandler ? relayHandler.stats() : {}),
+  };
+}
+
+const postRelayBatch = async (batch: HeartbeatRelayBatch): Promise<unknown> => {
+  const res = await cloudFetch(HEARTBEAT_RELAY_CLOUD_PATH, { method: "POST", body: JSON.stringify(batch) });
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+};
+
+function startHeartbeatRelay(): void {
+  if (!relayConfig.enabled) return;
+  try {
+    const queue = createBuffer(relayConfig.queuePath, { maxRows: relayConfig.queueMaxRows });
+    relayBuffer = queue;
+    relayDrain = createRelayForwarder({ buffer: queue, send: postRelayBatch, log: relayLog });
+    relayHandler = createRelayHandler({
+      enqueue: (ping) => {
+        const { dropped } = queue.enqueue(ping);
+        if (dropped > 0) {
+          relayLog("ERROR", `Heartbeat relay queue full: dropped ${dropped} oldest pings. Cap=${queue.MAX_ROWS}.`);
+        }
+      },
+      log: relayLog,
+    });
+    relayServer = startRelayServer(relayConfig, relayHandler.handle);
+    runDrainLoop(relayDrain, "Heartbeat relay");
+    log(
+      "INFO",
+      `Heartbeat relay listening on http://${relayServer.hostname}:${relayServer.port}/heartbeat/<token> ` +
+        `(${describeRelayBind(relayServer.hostname)})`,
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    handleError("Failed to start heartbeat relay: " + msg, error);
+  }
+}
 
 // ───────────────────────── Boot ──────────────────────────────────────
 
 startDrainLoop();
 startHeartbeatLoop();
-// CloudWatch work poller starts lazily from pollDefinitions when a
+// CloudWatch work poller starts lazily from applyDefinitions when a
 // cloudwatch source is present (F8) — not here.
 
 if (ENABLE_DEBUG_DASHBOARD !== "false") {
@@ -853,7 +958,9 @@ if (ENABLE_DEBUG_DASHBOARD !== "false") {
   log("INFO", "Debug dashboard disabled (ENABLE_DEBUG_DASHBOARD=false).");
 }
 
-startMetricPolling().catch((error: unknown) => {
+startHeartbeatRelay();
+
+definitionsRefresher.start().catch((error: unknown) => {
   const msg = error instanceof Error ? error.message : String(error);
   handleError("Error initializing metric polling: " + msg, error);
 });
@@ -863,6 +970,13 @@ async function shutdown(signal: string): Promise<void> {
   // Stop producers first so nothing enqueues into (or resurrects) the
   // buffer between close() and exit.
   if (heartbeatTimer) clearInterval(heartbeatTimer);
+  definitionsRefresher.stop();
+  // Stop accepting relay pings; queued ones stay on disk for the next start.
+  try {
+    relayServer?.stop();
+  } catch {
+    /* already stopped */
+  }
   for (const entry of metricJobs.values()) {
     entry.pollingJob.stop();
     entry.pushJob.stop();
@@ -881,6 +995,11 @@ async function shutdown(signal: string): Promise<void> {
   }
   try {
     buffer.close();
+  } catch {
+    /* already closed */
+  }
+  try {
+    relayBuffer?.close();
   } catch {
     /* already closed */
   }

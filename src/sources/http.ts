@@ -13,6 +13,7 @@ import { HttpConfigSchema, type HttpConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
 import { parseAndExtract } from "./_json-path.ts";
 import { hasMtls, isCertExpiringSoon, loadMtlsMaterial, type MtlsMaterial } from "./_mtls.ts";
+import { resolveHeaderRefs } from "./_header-refs.ts";
 
 const BODY_PREVIEW_BYTES = 4096;
 // 10 MB cap on JSON bodies. Anything larger is almost certainly a
@@ -33,7 +34,6 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
     : [config.expected_status ?? 200];
   const verifyTls = config.verify_tls !== false;
   const followRedirects = config.follow_redirects !== false;
-  const headers = config.headers || {};
 
   // Defense-in-depth: the Zod schema restricts url to http/https, but re-check
   // at runtime so a stale/out-of-band config can't reach file:// (local file
@@ -46,6 +46,22 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
   } catch {
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: "invalid_url", metadata: {} };
   }
+
+  // Secret headers. header_refs names env vars on this host; their values
+  // are merged over the inline (non-secret) headers. An unset ref is a
+  // typed no_data, never a request sent without its auth header. Only the
+  // header + env var NAMES reach metadata; values never leave this scope.
+  const resolvedHeaders = resolveHeaderRefs(config.headers, config.header_refs);
+  if (!resolvedHeaders.ok) {
+    return {
+      value: null,
+      timestamp: ts(),
+      status_hint: "no_data",
+      reason: resolvedHeaders.reason,
+      metadata: { header: resolvedHeaders.header, header_ref: resolvedHeaders.ref },
+    };
+  }
+  const headers = resolvedHeaders.headers;
 
   // mTLS. When cert+key refs are present, load the
   // PEM material from the agent's env and pass it on the per-request
@@ -92,8 +108,8 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
   const start = Date.now();
 
   try {
-    // Follow redirects manually so operator-supplied headers (which may carry
-    // auth) are DROPPED on a cross-origin hop — `redirect:"follow"` would
+    // Follow redirects manually so operator-supplied headers (inline AND the
+    // resolved header_refs secrets) are DROPPED on a cross-origin hop — `redirect:"follow"` would
     // re-send them to the redirect target. Same-origin hops keep the headers.
     const MAX_REDIRECTS = 5;
     const origin0 = new URL(config.url).origin;

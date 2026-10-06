@@ -6,7 +6,10 @@
 // Safeguards (all enforced before the query leaves the agent):
 //   1. The DSN comes from process.env via `connection_string_ref`.
 //      Never persisted in source_config or returned in metadata.
-//   2. The query passes the SELECT-only parser (`./database/_query-check`).
+//   2. The query passes the kind's read-only check (SELECT-only parser,
+//      Redis allowlist, Mongo count spec), shared with the cloud via
+//      @observer/probe-config (packages/probe-config/src/database), so
+//      DatabaseConfigSchema rejects an unsafe query at save time too.
 //      Multi-statement bodies, INSERT/UPDATE/DELETE/DDL all rejected.
 //   3. Statement timeout enforced at the database connection
 //      (postgres `statement_timeout`, mysql session
@@ -22,11 +25,8 @@
 // the agent has no way to inspect upstream role grants reliably.
 
 import type { ProbeResult, ProbeSource } from "../types.ts";
-import { DatabaseConfigSchema, type DatabaseConfig } from "@observer/probe-config";
+import { DatabaseConfigSchema, checkDatabaseQuery, type DatabaseConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
-import { checkSelectOnly } from "./database/_query-check.ts";
-import { checkRedisCommand } from "./database/_redis-check.ts";
-import { checkMongoQuery } from "./database/_mongo-check.ts";
 import {
   runQuery as runPgQuery,
   resetPgClientCacheForTests,
@@ -45,25 +45,9 @@ import {
 } from "./database/mongo.ts";
 
 export function validateConfig(config: unknown): null | string {
-  const baseError = validateWithSchema(DatabaseConfigSchema, config);
-  if (baseError) return baseError;
-  const c = config as DatabaseConfig;
-  if (c.kind === "postgres" || c.kind === "mysql") {
-    const check = checkSelectOnly(c.query);
-    if (!check.ok) return `query: ${check.reason}`;
-    return null;
-  }
-  if (c.kind === "redis") {
-    const check = checkRedisCommand(c.query);
-    if (!check.ok) return `query: ${check.reason}`;
-    return null;
-  }
-  if (c.kind === "mongodb") {
-    const check = checkMongoQuery(c.query);
-    if (!check.ok) return `query: ${check.reason}`;
-    return null;
-  }
-  return `kind "${(c as { kind?: string }).kind}" runtime not implemented`;
+  // DatabaseConfigSchema runs the kind's read-only query check
+  // (checkDatabaseQuery), so a failure reads "query: <reason>".
+  return validateWithSchema(DatabaseConfigSchema, config);
 }
 
 function curatedMetadata(config: DatabaseConfig): Record<string, unknown> {
@@ -85,19 +69,12 @@ const RUNNERS: Record<string, Runner> = {
   mongodb: runMongoQuery,
 };
 
-const KIND_CHECKERS: Record<string, (query: string) => { ok: boolean; reason?: string }> = {
-  postgres: checkSelectOnly,
-  mysql: checkSelectOnly,
-  redis: checkRedisCommand,
-  mongodb: checkMongoQuery,
-};
 
 export async function execute(config: DatabaseConfig): Promise<ProbeResult> {
   const ts = (): string => new Date().toISOString();
 
   const runner = RUNNERS[config.kind];
-  const checker = KIND_CHECKERS[config.kind];
-  if (!runner || !checker) {
+  if (!runner) {
     return {
       value: null,
       timestamp: ts(),
@@ -121,7 +98,7 @@ export async function execute(config: DatabaseConfig): Promise<ProbeResult> {
   // Defensive second-check at execute time. If a malformed query
   // slipped through (e.g. config edited out-of-band), reject before
   // the query reaches the database / cache.
-  const check = checker(config.query);
+  const check = checkDatabaseQuery(config.kind, config.query);
   if (!check.ok) {
     return {
       value: null,

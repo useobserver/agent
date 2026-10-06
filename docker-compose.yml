@@ -1,19 +1,29 @@
 # docker-compose.yml — Observer agent.
 #
-# Runs the published image. Provide an .env file with at least AGENT_KEY,
-# PROMETHEUS_SERVER_URL, and CLOUD_SERVER_URL (see README). To build from
-# source instead, replace `image:` with:
+# Runs the published image. Provide an .env file with at least AGENT_KEY
+# (see README). CLOUD_SERVER_URL defaults to https://use.observer, and
+# PROMETHEUS_SERVER_URL is optional (only needed for prometheus metrics).
+#
+# The `:1` tag tracks the latest 1.x release. Pin an exact version
+# (e.g. `:1.6.0`) if you want upgrades to be explicit.
+#
+# To build from source instead, replace `image:` with:
 #   build:
 #     context: .
 #     dockerfile: Dockerfile
 
 services:
   observer-agent:
-    image: ghcr.io/useobserver/agent:1.1.0
+    image: ghcr.io/useobserver/agent:1
     container_name: observer-agent
     env_file:
       - .env
     restart: unless-stopped
+    # Unsent samples queue in SQLite at BUFFER_PATH, which the image sets to
+    # /data/observer-agent-buffer.db. Keep /data on a volume so the queue
+    # survives the container being recreated (e.g. on upgrade).
+    volumes:
+      - observer-agent-buffer:/data
 
     # --- Debug dashboard (optional) ---------------------------------
     # The dashboard binds 127.0.0.1 inside the container, so publishing
@@ -25,8 +35,20 @@ services:
     # ports:
     #   - "10101:10101"
 
+    # --- Heartbeat relay (optional) ---------------------------------
+    # Lets jobs without internet access report heartbeat checks through
+    # this agent: http://<agent-host>:10102/heartbeat/<token>. Set:
+    #   HEARTBEAT_RELAY_ENABLED=true
+    #   HEARTBEAT_RELAY_HOST=0.0.0.0
+    # and publish the port on a private interface only:
+    # ports:
+    #   - "10.0.0.5:10102:10102"
+
     # --- ICMP probes (optional) -------------------------------------
-    # The icmp source needs raw-socket capability:
+    # The published image is distroless and has no `ping`, so the icmp
+    # source reports no_data here even with NET_RAW. To run icmp probes,
+    # use the standalone binary, or build a custom image that adds
+    # iputils and then grant raw-socket capability:
     # cap_add:
     #   - NET_RAW
 
@@ -42,5 +64,8 @@ services:
     #   - NO_PROXY=prometheus.internal,.corp.local
     #   # TLS-inspecting proxy CA (do NOT use SKIP_SSL_VERIFICATION):
     #   - NODE_EXTRA_CA_CERTS=/etc/observer/corp-ca.pem
-    # volumes:
+    # and add to the volumes list above:
     #   - ./corp-ca.pem:/etc/observer/corp-ca.pem:ro
+
+volumes:
+  observer-agent-buffer:

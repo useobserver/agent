@@ -6,7 +6,7 @@
 // word "update" inside a string literal or comment.
 
 import { describe, expect, it } from "bun:test";
-import { checkSelectOnly } from "../src/sources/database/_query-check.ts";
+import { checkSelectOnly } from "@observer/probe-config";
 
 describe("checkSelectOnly — accepts", () => {
   it("a plain SELECT", () => {

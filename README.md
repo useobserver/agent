@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/useobserver/agent/blob/main/LICENSE"><img src="https://img.shields.io/github/license/useobserver/agent?style=for-the-badge" alt="License"></a>
   <a href="https://github.com/useobserver/agent/releases"><img src="https://img.shields.io/github/release/useobserver/agent.svg?style=for-the-badge" alt="Latest Release"></a>
-  <a href="https://docs.use.observer/agent"><img src="https://img.shields.io/badge/Documentation-link-blue?style=for-the-badge" alt="Documentation link"></a>
+  <a href="https://docs.use.observer/agent/overview"><img src="https://img.shields.io/badge/Documentation-link-blue?style=for-the-badge" alt="Documentation link"></a>
 </p>
 
 <p align="center">
@@ -16,13 +16,14 @@
 
 The data-plane companion to [Observer](https://use.observer). The agent
 probes metric sources inside your network, evaluates each verdict
-locally, and pushes only the result to Observer Cloud over a single
-outbound HTTPS connection. Raw telemetry never leaves the network: the
-agent sends `{ metric_id, value, status, timestamp }`, not your query
-results or credentials.
+locally, and pushes the result to Observer Cloud over a single outbound
+HTTPS connection. The agent sends readings and verdicts (with a reason
+code) plus a health heartbeat. Credentials, connection strings, and raw
+query responses stay on the host. Log forwarding (`BROADCAST_LOGS`) is
+off by default.
 
 ```
-┌─────────────────┐   probe (5–60s)   ┌──────────────┐   push (status only)   ┌──────────────┐
+┌─────────────────┐   probe (5-60s)   ┌──────────────┐    push (verdicts)     ┌──────────────┐
 │ Prometheus,     │ ─────────────────▶│ Observer     │ ──────────────────────▶│ Observer     │
 │ HTTP, TCP, DNS, │                   │ Agent        │                        │ Cloud        │
 │ TLS, databases, │                   │ (this repo)  │                        │ status pages │
@@ -38,23 +39,30 @@ bun install
 
 # 2. Configure (or use a .env file)
 export AGENT_KEY="obs_live_..."                  # issued on the cloud Agents page
-export PROMETHEUS_SERVER_URL="http://prometheus:9090"
-export CLOUD_SERVER_URL="https://your-observer-cloud"
+export CLOUD_SERVER_URL="https://use.observer"
+export PROMETHEUS_SERVER_URL="http://prometheus:9090"   # optional: prometheus metrics only
 
 # 3. Run
 bun run src/index.ts
 ```
 
 `AGENT_KEY` is issued when you create an agent in Observer Cloud (the
-Agents page) and is shown once. `PROMETHEUS_SERVER_URL` is required even
-if you only run active probes (HTTP, TCP, DNS, …); point it at any
-reachable Prometheus, or a placeholder if you have none yet.
+Agents page) and is shown once. `PROMETHEUS_SERVER_URL` is optional: set
+it only if you define `prometheus` metrics. Without it the agent logs a
+warning at boot, `prometheus` metrics report `no_data`, and every other
+source works normally.
 
 ### Docker
 
 ```bash
-docker run --env-file .env ghcr.io/useobserver/agent:1
+docker run -v observer-agent-buffer:/data --env-file .env ghcr.io/useobserver/agent:1
 ```
+
+The image sets `BUFFER_PATH=/data/observer-agent-buffer.db`, so readings
+queued during a cloud outage (and the heartbeat relay queue next to it)
+live on the `/data` volume and survive the container being recreated,
+for example on upgrade. Without a volume on `/data` the queue is lost
+with the container.
 
 The debug dashboard binds to `127.0.0.1` inside the container, so
 `-p 10101:10101` alone will not reach it (a published port dials the
@@ -62,11 +70,18 @@ container's external interface, not its loopback). To expose it, set
 `DEBUG_DASHBOARD_HOST=0.0.0.0` and a `DEBUG_DASHBOARD_TOKEN`, then
 publish the port. See [Debug dashboard](#debug-dashboard).
 
-For the `icmp` source under Docker, add `--cap-add=NET_RAW`.
+The published image is distroless and ships no `ping` binary, so the
+`icmp` source reports `no_data` in it. Adding `--cap-add=NET_RAW` is not
+enough on its own. To run `icmp` probes, use the standalone binary on a
+host that has `ping`, or build a custom image that adds `iputils` (and
+grant `NET_RAW` to that container).
 
 A [`docker-compose.yml`](./docker-compose.yml) is included for a
-longer-lived deployment. Pin to an exact version tag rather than
-`latest`; track releases on the repository's Releases page.
+longer-lived deployment. It uses the `:1` tag (the latest 1.x
+release); pin an exact version such as `:1.6.0` if you want upgrades to
+be explicit. `latest` moves only on release tags. Track releases on the
+repository's Releases page; each release ships standalone binaries with
+a `SHA256SUMS.txt` checksum file (named `SHA256SUMS` before 1.6.0).
 
 ## Probe types
 
@@ -93,10 +108,13 @@ type and reports the sample value below.
 | `mtls_http`     | deprecated | delegates to `http`                                  |
 
 `icmp` shells out to the system `ping` and needs the `CAP_NET_RAW`
-capability (or equivalent) on the host. `mtls_http` is retained for
-backward compatibility; configure mutual TLS on the `http` source
-instead. Connection strings, AWS credentials, and client keys are read
-from named host environment variables and never sent to the cloud.
+capability (or equivalent) on the host. It works with the standalone
+binary or a custom image that adds `iputils`; the published image has
+no `ping` (see [Docker](#docker)). `mtls_http` is retained for backward
+compatibility; configure mutual TLS on the `http` source instead.
+Connection strings, AWS credentials, client keys, and auth headers
+(`header_refs` / `metadata_refs`) are read from named env vars on the
+host and never sent to the cloud.
 
 ## Requirements
 
@@ -104,15 +122,16 @@ from named host environment variables and never sent to the cloud.
   other platforms `host` vitals degrade gracefully to `no_data`.
 - **Linux** is first-class for the `host` source (reads `/proc`);
   macOS is supported with coarser values.
-- **`CAP_NET_RAW`** on the host for the `icmp` source only.
+- **`ping` plus `CAP_NET_RAW`** on the host for the `icmp` source only
+  (not available in the published distroless image).
 
 ## Environment
 
 | Variable                          | Required | Default                      | Purpose                                                                                                                                                |
 | --------------------------------- | -------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `AGENT_KEY`                       | yes      | —                            | Per-agent authentication credential (`obs_live_…`)                                                                                                     |
-| `PROMETHEUS_SERVER_URL`           | yes      | —                            | Reachable Prometheus endpoint                                                                                                                          |
-| `CLOUD_SERVER_URL`                | no       | `https://localhost:3000`     | Observer Cloud receiver                                                                                                                                |
+| `CLOUD_SERVER_URL`                | no       | `https://use.observer`       | Observer Cloud receiver                                                                                                                                |
+| `PROMETHEUS_SERVER_URL`           | no       | —                            | Prometheus endpoint for `prometheus` metrics. When unset, those metrics report `no_data`; other sources are unaffected                                 |
 | `PROMETHEUS_BASIC_AUTH_ENABLED`   | no       | `true`                       | Toggle HTTP basic auth on Prometheus                                                                                                                   |
 | `PROMETHEUS_USERNAME`             | no       | `admin`                      | Basic-auth username, used when basic auth is enabled                                                                                                   |
 | `PROMETHEUS_PASSWORD`             | no       | —                            | Basic-auth password, used when basic auth is enabled                                                                                                   |
@@ -125,7 +144,10 @@ from named host environment variables and never sent to the cloud.
 | `DEBUG_DASHBOARD_PORT`            | no       | `10101`                      | Dashboard port                                                                                                                                         |
 | `DEBUG_DASHBOARD_TOKEN`           | no       | —                            | Bearer token gating the dashboard. Required before it will bind a non-loopback `DEBUG_DASHBOARD_HOST`                                                  |
 | `BUFFER_MAX_ROWS`                 | no       | `10000`                      | Max rows in the local SQLite push buffer before oldest-row eviction                                                                                    |
-| `BUFFER_PATH`                     | no       | `./observer-agent-buffer.db` | Path to the local SQLite buffer file                                                                                                                   |
+| `BUFFER_PATH`                     | no       | `./observer-agent-buffer.db` | Path to the local SQLite buffer file. The container image sets `/data/observer-agent-buffer.db`; mount a volume on `/data`                            |
+| `HEARTBEAT_RELAY_ENABLED`         | no       | `false`                      | Set `true` to start the [heartbeat relay](#heartbeat-relay) for jobs without internet access                                                           |
+| `HEARTBEAT_RELAY_HOST`            | no       | `127.0.0.1`                  | Relay bind address. Loopback-only by default; set `0.0.0.0` to accept pings from other hosts or pods                                                   |
+| `HEARTBEAT_RELAY_PORT`            | no       | `10102`                      | Relay port                                                                                                                                             |
 | `OBSERVER_OTLP_DISABLE`           | no       | `false`                      | Set `true` to disable the built-in OpenTelemetry Protocol receiver                                                                                     |
 | `OBSERVER_OTLP_LISTEN_ADDR`       | no       | `127.0.0.1:4318`             | OTLP/HTTP receiver bind address. A non-loopback bind requires `OBSERVER_OTLP_BEARER_TOKEN`                                                             |
 | `OBSERVER_OTLP_BEARER_TOKEN`      | no       | —                            | Bearer token required when the OTLP receiver binds a non-loopback interface                                                                            |
@@ -138,15 +160,25 @@ from named host environment variables and never sent to the cloud.
 
 ## Security and privacy
 
-- **Verdicts only.** The push payload is `{ metric_id, value, status,
-timestamp }`. Query strings, credentials, and raw responses stay on
-  your host; query strings are sha256-prefixed in any logs.
+- **Readings and verdicts only.** Each push carries `{ metric_id,
+  value, status, timestamp }` plus an optional reason code, and the
+  agent sends a health heartbeat. Credentials, connection strings, and
+  raw query responses stay on your host; query strings are
+  sha256-prefixed in any logs.
+- **Secrets stay local.** Connection strings, AWS credentials, client
+  keys, and auth headers (`header_refs` / `metadata_refs`) are read from
+  named env vars on the host and never sent to the cloud.
+- **Log forwarding is opt-in.** `BROADCAST_LOGS` is `false` by default;
+  when enabled, only entries at or above `LOG_BROADCAST_LEVEL` are sent.
 - **TLS on by default.** Certificate verification on the cloud channel
   is enabled unless you explicitly set `SKIP_SSL_VERIFICATION=true`.
 - **Loopback by default.** The debug dashboard and the OTLP receiver
   bind to `127.0.0.1`. Each refuses to listen on a non-loopback address
   until you set its bearer token (`DEBUG_DASHBOARD_TOKEN` /
-  `OBSERVER_OTLP_BEARER_TOKEN`).
+  `OBSERVER_OTLP_BEARER_TOKEN`). The heartbeat relay is off unless
+  `HEARTBEAT_RELAY_ENABLED=true`, binds `127.0.0.1` by default, and
+  forwards only what a job sends it: the ping, its exit code and up to
+  10 KB of request body.
 
 ## Restricted networks (proxy / egress allowlist)
 
@@ -162,9 +194,9 @@ host in `CLOUD_SERVER_URL`. Everything else it talks to (probe targets:
 Prometheus, HTTP endpoints, databases, …) is on your own network. There
 is no inbound requirement and no second outbound destination.
 
-On an allowlist, permit `443/tcp` to the cloud host. A fully air-gapped
-network with zero egress cannot reach the hosted cloud at all: in that
-case you need a self-hosted Observer Cloud, not just a proxy.
+On an allowlist, permit `443/tcp` to the cloud host. A network with zero
+egress cannot reach Observer Cloud; the agent needs at least a proxy path
+to the cloud host.
 
 ### Proxy configuration
 
@@ -253,10 +285,65 @@ the token as a bearer credential.
     <img src="assets/screenshot.jpg" alt="Observer Agent - Debug dashboard" height="100%">
 </p>
 
+## Heartbeat relay
+
+Heartbeat checks expect your job to call a ping URL on Observer Cloud. A
+job in a private network with no internet access can ping the agent
+instead, and the agent forwards the ping over its own outbound
+connection.
+
+Enable it on the agent:
+
+```bash
+HEARTBEAT_RELAY_ENABLED=true
+HEARTBEAT_RELAY_HOST=0.0.0.0   # only when other hosts or pods send pings
+HEARTBEAT_RELAY_PORT=10102
+```
+
+Then point the job at the agent. The paths are the same as on the ping
+URL, with the agent's address in front:
+
+```bash
+curl -fsS -m 10 --retry 3 -o /dev/null http://<agent-host>:10102/heartbeat/<token>/start
+/usr/local/bin/backup.sh \
+  && curl -fsS -m 10 --retry 3 -o /dev/null http://<agent-host>:10102/heartbeat/<token> \
+  || curl -fsS -m 10 --retry 3 -o /dev/null http://<agent-host>:10102/heartbeat/<token>/fail
+```
+
+- `/heartbeat/<token>` reports success, `/start` a run start, `/fail` a
+  failure, and `/<exit code>` (or `?exit=<n>`) a finish with that exit
+  code. `GET`, `POST` and `HEAD` all work. A `POST` body (the first
+  10 KB) is kept as the run's output.
+- The agent answers `202` as soon as the ping is queued. It cannot tell
+  whether a token is valid, so a well-formed ping always gets `202`; an
+  unknown token, or one for a check in another organization, is dropped
+  by Observer and logged by the agent as `not_found`.
+- Pings wait in a durable local queue (`<BUFFER_PATH>` with a `-relay`
+  suffix, up to 5000 pings) and are delivered in order, so a short cloud
+  outage loses nothing. Each ping keeps the time the agent received it,
+  so a delayed delivery does not make the check look late. Pings delayed
+  by more than an hour are recorded as one hour old.
+- If the agent stops, relayed checks go late like any missed run, and
+  the agent's own offline alert fires.
+- Limits: 60 pings a minute per token and 600 a minute in total. Tokens
+  never appear in full in the agent's logs.
+
+**Exposure.** The relay listens on `127.0.0.1` unless you set
+`HEARTBEAT_RELAY_HOST`. It has no bearer token: a ping token is the
+only credential, the same as on the ping URL, and the relay returns
+nothing but `202`. Keep a non-loopback relay inside your private
+network (for example a cluster-internal Kubernetes Service), and do not
+publish the port to the internet.
+
 ## How it works
 
-The agent refetches its metric definitions from the cloud every 5
-minutes and sends a heartbeat every 30 seconds. Each definition is
+The agent sends a heartbeat every 30 seconds. The heartbeat response
+carries a version of the agent's metric definitions; when it changes,
+the agent refetches its definitions right away, so console edits apply
+within about 30 seconds. It also polls every 30 seconds for the first
+10 minutes after start while it has no definitions, and every 5 minutes
+as a backstop (the only trigger against clouds that do not send a
+version). Each definition is
 scheduled on its own interval; a verdict is pushed on status change or
 on a forced-push interval. Pending pushes are held in a durable local
 SQLite buffer (`bun:sqlite`) and drained with exponential backoff, so a

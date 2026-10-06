@@ -32,3 +32,9 @@ export interface MetricDefinition {
   unhealthy_value: number | string;
   agent_id?: string | null;
 }
+
+// Response header on GET /api/agent/metrics-definitions carrying the
+// definitions version of the returned set (see HeartbeatResponse.
+// definitions_version). Lowercase: fetch Headers lookups are
+// case-insensitive, and this is what HTTP/2 puts on the wire anyway.
+export const DEFINITIONS_VERSION_HEADER = "x-observer-definitions-version";

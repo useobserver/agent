@@ -62,6 +62,24 @@ export interface AgentBuildInfo {
   source_hash: string;
 }
 
+// Cloud → agent: body of a 200 heartbeat response. Every field is
+// additive; agents ignore what they don't know and must tolerate any
+// field being absent (older clouds, fenced responses).
+export interface HeartbeatResponse {
+  ok: boolean;
+  // true when this process lost duplicate-key fencing; nothing else is set.
+  fenced?: boolean;
+  uptime_pct_24h?: number;
+  restart_count_24h?: number;
+  // Opaque fingerprint of the metric definitions currently assigned to
+  // this agent. Same value the definitions endpoint returns in the
+  // DEFINITIONS_VERSION_HEADER response header. When it differs from the
+  // version of the agent's last fetch, the agent re-fetches right away
+  // instead of waiting for its periodic poll. Absent on clouds that
+  // predate the signal; agents then rely on the periodic poll alone.
+  definitions_version?: string;
+}
+
 export interface HealthAlertState {
   state: "off" | "on";
   open_at?: string;

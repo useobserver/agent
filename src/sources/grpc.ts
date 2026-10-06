@@ -23,6 +23,7 @@ import type { ProbeResult, ProbeSource } from "../types.ts";
 import { GrpcConfigSchema, type GrpcConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
 import { isCertExpiringSoon, loadMtlsMaterial, loadPemRef } from "./_mtls.ts";
+import { resolveMetadataRefs } from "./_header-refs.ts";
 
 export function validateConfig(config: unknown): null | string {
   return validateWithSchema(GrpcConfigSchema, config);
@@ -181,13 +182,18 @@ function buildCredentials(config: GrpcConfig): CredsResult {
   };
 }
 
-function runCheck(config: GrpcConfig, creds: grpc.ChannelCredentials): Promise<CheckOutcome> {
+// `metadata` is the merged call metadata (inline + resolved metadata_refs).
+function runCheck(
+  config: GrpcConfig,
+  creds: grpc.ChannelCredentials,
+  metadata: Record<string, string>,
+): Promise<CheckOutcome> {
   const timeoutMs = config.timeout_ms ?? 5_000;
   const target = `${config.host}:${config.port}`;
   return new Promise<CheckOutcome>((resolve) => {
     // Build call metadata BEFORE creating the client. grpc-js throws on
     // illegal metadata keys/values with a message that embeds the FULL
-    // value — which per the schema docs is an auth token. That message
+    // value, which may be a secret resolved from metadata_refs. That message
     // must never escape runCheck (it would land in logs), so we guard
     // the construction and return a typed reason with NO detail. The
     // client is only created after the metadata is known-good, so
@@ -195,7 +201,7 @@ function runCheck(config: GrpcConfig, creds: grpc.ChannelCredentials): Promise<C
     let md: grpc.Metadata;
     try {
       md = new grpc.Metadata();
-      for (const [k, v] of Object.entries(config.metadata ?? {})) md.set(k, v);
+      for (const [k, v] of Object.entries(metadata)) md.set(k, v);
     } catch {
       resolve({ ok: false, reason: "grpc_metadata_invalid" });
       return;
@@ -254,6 +260,26 @@ export async function execute(config: GrpcConfig): Promise<ProbeResult> {
   const interpretation = config.interpretation ?? "health_state";
   const mode = config.tls_mode ?? "plaintext";
 
+  // Secret call metadata: metadata_refs names env vars on this host,
+  // resolved now and merged over the inline metadata. A missing or
+  // malformed value fails closed (no unauthenticated call) with a reason
+  // naming only the key and the env var, never the value.
+  const resolved = resolveMetadataRefs(config.metadata, config.metadata_refs);
+  if (!resolved.ok) {
+    return {
+      value: null,
+      timestamp: ts(),
+      status_hint: "no_data",
+      reason: resolved.reason,
+      metadata: {
+        target: `${config.host}:${config.port}`,
+        tls_mode: mode,
+        metadata_key: resolved.key,
+        metadata_ref: resolved.ref,
+      },
+    };
+  }
+
   const credsRes = buildCredentials(config);
   if (!credsRes.ok) {
     return {
@@ -269,7 +295,7 @@ export async function execute(config: GrpcConfig): Promise<ProbeResult> {
     };
   }
 
-  const outcome = await runCheck(config, credsRes.creds);
+  const outcome = await runCheck(config, credsRes.creds, resolved.metadata);
 
   const baseMeta: Record<string, unknown> = {
     target: `${config.host}:${config.port}`,

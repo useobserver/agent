@@ -9,6 +9,7 @@
 // definitions before the runtime lands.
 
 import { z } from "zod";
+import { checkDatabaseQuery } from "./database";
 
 // Status-flip dwell bounds (dwell_seconds_to_breach / dwell_seconds_to_recover
 // on a metric definition). Single source of truth for every surface that
@@ -34,6 +35,164 @@ const envVarRef = z
   .min(1)
   .max(256)
   .regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE env var name");
+
+// ── Request headers (http + websocket) ──────────────────────────────
+//
+// `headers` values are stored verbatim in source_config, which the cloud
+// persists, so they must never carry a secret. Secret headers go in
+// `header_refs`: header NAME -> NAME of an env var on the agent host. The
+// agent reads the value from process.env at probe time; the cloud only
+// ever sees the env var name (same model as connection_string_ref,
+// client_cert_ref, token_ref, ...).
+export const HEADER_NAME_MAX_LENGTH = 128;
+export const HEADER_REFS_MAX_ENTRIES = 32;
+// RFC 7230 section 3.2.6 token: the only characters legal in a field name.
+const HEADER_NAME_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+export function isValidHeaderName(name: string): boolean {
+  return name.length > 0 && name.length <= HEADER_NAME_MAX_LENGTH && HEADER_NAME_TOKEN.test(name);
+}
+const CREDENTIAL_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  "api-key",
+  "apikey",
+]);
+const CREDENTIAL_HEADER_FRAGMENTS = ["token", "secret", "password", "passwd", "auth", "session"];
+// True when an inline header NAME looks like it carries a credential.
+// Case-insensitive. Shared with the console form so the client-side
+// nudge and the server rule never drift.
+export function isCredentialHeaderName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (!n) return false;
+  if (CREDENTIAL_HEADER_NAMES.has(n)) return true;
+  if (CREDENTIAL_HEADER_FRAGMENTS.some((f) => n.includes(f))) return true;
+  // Covers "-key", "_key" and bare "...key" (x-goog-api-key, apikey, ...).
+  return n.endsWith("key");
+}
+export function credentialHeaderMessage(name: string): string {
+  return `Header "${name}" looks like a credential. Put it in header_refs as an env var name on the agent host.`;
+}
+const headerName = z
+  .string()
+  .min(1, "header name must not be empty")
+  .max(HEADER_NAME_MAX_LENGTH, `header name must be at most ${HEADER_NAME_MAX_LENGTH} characters`)
+  .regex(HEADER_NAME_TOKEN, "header name must be a valid HTTP token (letters, digits, and !#$%&'*+-.^_`|~)");
+const headerRefs = z
+  .record(headerName, envVarRef)
+  .refine((o) => Object.keys(o).length <= HEADER_REFS_MAX_ENTRIES, {
+    message: `header_refs allows at most ${HEADER_REFS_MAX_ENTRIES} entries`,
+  });
+
+// Cross-field rules shared by every "inline map + secret refs map" pair
+// (http / mtls_http / websocket headers + header_refs, grpc metadata +
+// metadata_refs):
+//   1. an inline entry whose NAME looks like a credential is rejected
+//      (it would be persisted by the cloud);
+//   2. a name may not be set in both the inline map and the refs map
+//      (case-insensitive, as HTTP field names and gRPC metadata keys are);
+//   3. the refs map may not repeat a name case-insensitively.
+// Messages name the field, never a value.
+function secretRefFieldRefinement(opts: {
+  inlineKey: string;
+  refsKey: string;
+  noun: string;
+  credentialMessage: (name: string) => string;
+}) {
+  return (v: Record<string, unknown>, ctx: z.RefinementCtx): void => {
+    const inline = (v[opts.inlineKey] ?? {}) as Record<string, string>;
+    const refs = (v[opts.refsKey] ?? {}) as Record<string, string>;
+    for (const name of Object.keys(inline)) {
+      if (isCredentialHeaderName(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [opts.inlineKey, name],
+          message: opts.credentialMessage(name),
+        });
+      }
+    }
+    const inlineLower = new Set(Object.keys(inline).map((k) => k.toLowerCase()));
+    const seenRefs = new Set<string>();
+    for (const name of Object.keys(refs)) {
+      const lower = name.toLowerCase();
+      if (inlineLower.has(lower)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [opts.refsKey, name],
+          message: `${opts.noun} "${name}" is set in both ${opts.inlineKey} and ${opts.refsKey}. Keep it in ${opts.refsKey} only.`,
+        });
+      }
+      if (seenRefs.has(lower)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [opts.refsKey, name],
+          message: `${opts.noun} "${name}" appears more than once in ${opts.refsKey} (names are case-insensitive).`,
+        });
+      }
+      seenRefs.add(lower);
+    }
+  };
+}
+
+const refineHeaderFields = secretRefFieldRefinement({
+  inlineKey: "headers",
+  refsKey: "header_refs",
+  noun: "Header",
+  credentialMessage: credentialHeaderMessage,
+});
+
+// ── gRPC call metadata (grpc) ───────────────────────────────────────
+//
+// Same model as headers: `metadata` is stored verbatim (non-secret only),
+// `metadata_refs` maps a metadata KEY to the NAME of an env var on the
+// agent host, resolved at probe time.
+//
+// Keys follow the gRPC wire rules (PROTOCOL-HTTP2.md "Custom-Metadata"):
+// digits, letters, "-", "_", ".". Keys are case-insensitive and sent
+// lowercase (grpc-js normalises), so uppercase input is accepted. The
+// reserved "grpc-" prefix is rejected, and so are binary "-bin" keys:
+// their values must be raw bytes, which a string config cannot express.
+export const GRPC_METADATA_KEY_MAX_LENGTH = 128;
+export const METADATA_REFS_MAX_ENTRIES = 32;
+const GRPC_METADATA_KEY = /^[0-9A-Za-z_.-]+$/;
+// Null when `key` is a legal, non-reserved, non-binary metadata key;
+// otherwise a message naming the problem (never a value).
+export function grpcMetadataKeyProblem(key: string): string | null {
+  if (key.length === 0) return "metadata key must not be empty";
+  if (key.length > GRPC_METADATA_KEY_MAX_LENGTH) {
+    return `metadata key must be at most ${GRPC_METADATA_KEY_MAX_LENGTH} characters`;
+  }
+  if (!GRPC_METADATA_KEY.test(key)) {
+    return "metadata key may only contain letters, digits, '-', '_' and '.'";
+  }
+  const lower = key.toLowerCase();
+  if (lower.startsWith("grpc-")) return 'metadata keys starting with "grpc-" are reserved by gRPC';
+  if (lower.endsWith("-bin")) return 'binary metadata keys (ending in "-bin") are not supported';
+  return null;
+}
+export function isValidGrpcMetadataKey(key: string): boolean {
+  return grpcMetadataKeyProblem(key) === null;
+}
+export function credentialMetadataMessage(key: string): string {
+  return `Metadata key "${key}" looks like a credential. Put it in metadata_refs as an env var name on the agent host.`;
+}
+const grpcMetadataKey = z.string().superRefine((key, ctx) => {
+  const problem = grpcMetadataKeyProblem(key);
+  if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+});
+const metadataRefs = z
+  .record(grpcMetadataKey, envVarRef)
+  .refine((o) => Object.keys(o).length <= METADATA_REFS_MAX_ENTRIES, {
+    message: `metadata_refs allows at most ${METADATA_REFS_MAX_ENTRIES} entries`,
+  });
+const refineMetadataFields = secretRefFieldRefinement({
+  inlineKey: "metadata",
+  refsKey: "metadata_refs",
+  noun: "Metadata key",
+  credentialMessage: credentialMetadataMessage,
+});
 
 // http/https only. z.string().url() alone admits file:// (and other schemes),
 // which on the agent host can become a local-file read/exfil oracle via the
@@ -72,8 +231,8 @@ const httpFields = {
     )
     // No userinfo credentials in the URL. A https://user:pass@host URL
     // embeds a secret in source_config (which the cloud persists) AND
-    // can leak via error messages that echo the URL. Use the headers
-    // field with an env-var-ref pattern instead.
+    // can leak via error messages that echo the URL. Put auth in
+    // header_refs (env var names resolved on the agent host) instead.
     .refine(
       (v) => {
         try {
@@ -83,12 +242,20 @@ const httpFields = {
           return false;
         }
       },
-      { message: "url must not contain credentials (user:pass@); use headers for auth" },
+      {
+        message:
+          "url must not contain credentials (user:pass@); put auth in header_refs as an env var name on the agent host",
+      },
     ),
   method: z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]).default("GET"),
   expected_status: z.union([z.number().int().min(100).max(599), z.array(z.number().int().min(100).max(599)).min(1)]).default(200),
   timeout_ms: timeoutMs.default(5_000),
+  // Non-secret request headers, stored verbatim. Credential-looking
+  // names are rejected (refineHeaderFields); those go in header_refs.
   headers: z.record(z.string(), z.string()).optional(),
+  // Secret request headers: header name -> env var NAME on the agent
+  // host. Resolved by the agent at probe time and merged over `headers`.
+  header_refs: headerRefs.optional(),
   body_match: z.string().optional(),
   follow_redirects: z.boolean().default(true),
   verify_tls: z.boolean().default(true),
@@ -134,7 +301,8 @@ export const PrometheusConfigSchema = z
 export const HttpConfigSchema = z
   .object(httpFields)
   .strict()
-  .refine(mtlsRefRefinement, mtlsRefMessage);
+  .refine(mtlsRefRefinement, mtlsRefMessage)
+  .superRefine(refineHeaderFields);
 
 // runtime: shipped
 export const TcpConfigSchema = z
@@ -213,8 +381,11 @@ export const IcmpConfigSchema = z
 //               falls back to the system trust store.
 //   mtls      — mutual TLS. client_cert_ref + client_key_ref required;
 //               reuses the agent's mTLS material loader.
-// metadata — gRPC call metadata (e.g. an authorization token). Values
-//   are treated as secrets: never logged, never surfaced in metadata.
+// metadata — non-secret gRPC call metadata, stored verbatim. Keys that
+//   look like credentials are rejected; those go in metadata_refs.
+// metadata_refs — secret call metadata: key -> env var NAME on the agent
+//   host, resolved at probe time and merged over `metadata`. Values are
+//   never logged and never surfaced in results.
 // interpretation:
 //   health_state — SERVING=1, NOT_SERVING=0, UNKNOWN=no_data,
 //                  SERVICE_UNKNOWN=no_data(error).
@@ -230,16 +401,17 @@ export const GrpcConfigSchema = z
     ca_cert_ref: envVarRef.optional(),
     // Values restricted to printable ASCII (no CR/LF/control chars):
     // grpc-js throws on illegal characters with an error message that
-    // embeds the full value — an auth token. The agent also guards at
-    // runtime (grpc_metadata_invalid); this is the save-time belt.
+    // embeds the full value. The agent also guards at runtime
+    // (grpc_metadata_invalid); this is the save-time belt.
     metadata: z
       .record(
-        z.string(),
+        grpcMetadataKey,
         z
           .string()
           .regex(/^[\x20-\x7E]*$/, "metadata values must be printable ASCII without newlines or control characters"),
       )
       .optional(),
+    metadata_refs: metadataRefs.optional(),
     timeout_ms: z.number().int().min(100).max(30_000).default(5_000),
     interpretation: z.enum(["health_state", "latency"]).default("health_state"),
   })
@@ -248,7 +420,8 @@ export const GrpcConfigSchema = z
   .refine((v) => v.tls_mode !== "mtls" || (Boolean(v.client_cert_ref) && Boolean(v.client_key_ref)), {
     message: "mTLS mode requires client_cert_ref and client_key_ref.",
     path: ["client_cert_ref"],
-  });
+  })
+  .superRefine(refineMetadataFields);
 
 // runtime: shipped (Bun native WebSocket)
 //
@@ -269,8 +442,10 @@ export const WebsocketConfigSchema = z
       message: "url must use ws:// or wss://",
     }),
     protocols: z.array(z.string().min(1).max(128)).max(16).optional(),
-    // Inline like the http source's headers field (same precedent).
+    // Non-secret handshake headers, stored verbatim. Secrets go in
+    // header_refs (env var names resolved on the agent), same as http.
     headers: z.record(z.string(), z.string()).optional(),
+    header_refs: headerRefs.optional(),
     ping_mode: z.enum(["none", "message"]).default("none"),
     send_message: z.string().max(8192).optional(),
     expect_message: z.string().max(8192).optional(),
@@ -296,7 +471,8 @@ export const WebsocketConfigSchema = z
   .refine((v) => v.ping_mode !== "message" || Boolean(v.send_message), {
     message: "ping_mode=message requires a send_message.",
     path: ["send_message"],
-  });
+  })
+  .superRefine(refineHeaderFields);
 
 // DEPRECATED. mTLS now lives on the `http` source
 // via the optional client_cert_ref / client_key_ref / ca_cert_ref
@@ -311,26 +487,27 @@ export const MtlsHttpConfigSchema = z
     client_cert_ref: envVarRef,
     client_key_ref: envVarRef,
   })
-  .strict();
+  .strict()
+  .superRefine(refineHeaderFields);
 
-// runtime: shipped (postgres + mysql; redis +
-// mongodb still stubbed pending the next batch of dispatch wiring)
+// runtime: shipped (postgres, mysql, redis, mongodb)
 //
-// SQL probe. The agent runs a single SELECT query per cron tick
+// Database probe. The agent runs one read-only query per cron tick
 // against a customer database and reports the scalar return value.
 //
-// kind — postgres or mysql in v1; redis + mongodb are accepted by the
-//   schema for forward-compat but the agent rejects them at
-//   validateConfig time until a runtime ships.
+// kind — postgres | mysql (SQL), redis (read-only command), mongodb
+//   (count spec as JSON).
 // connection_string_ref — name of an env var on the agent host
 //   holding the full database URL (e.g. "OBSERVER_PG_PROD_DSN"). The
 //   agent reads the value at execute() time and never persists it,
 //   logs it, or surfaces it in ProbeResult.metadata. Operators
 //   provision read-only credentials at the agent level and reference
 //   them here; the cloud never sees a secret.
-// query — single SELECT (or WITH ... SELECT) statement returning
-//   exactly one row with one column. Parser-checked at validate
-//   time; rejected before reaching the database.
+// query — SQL: single SELECT (or WITH ... SELECT) statement returning
+//   exactly one row with one column; redis: allowlisted read-only
+//   command; mongodb: countDocuments / estimatedDocumentCount spec.
+//   Checked by checkDatabaseQuery (./database) here at save time and
+//   again by the agent before the query reaches the database.
 // statement_timeout_ms — per-query hard timeout (default 5s, max 30s).
 //   Applied at the DB connection level (statement_timeout for
 //   postgres; MAX_EXECUTION_TIME for mysql) so the database itself
@@ -346,7 +523,13 @@ export const DatabaseConfigSchema = z
     query: z.string().min(1).max(8192),
     statement_timeout_ms: z.number().int().min(100).max(30_000).default(5_000),
   })
-  .strict();
+  .strict()
+  .superRefine((v, ctx) => {
+    const check = checkDatabaseQuery(v.kind, v.query);
+    if (!check.ok) {
+      ctx.addIssue({ code: "custom", path: ["query"], message: check.reason ?? "query is not allowed" });
+    }
+  });
 
 // runtime: shipped
 //
@@ -492,6 +675,49 @@ export type HostConfig = z.infer<typeof HostConfigSchema>;
 // incident. The agent filters these out at metrics-definitions time.
 export const ManualConfigSchema = z.object({}).strict();
 export type ManualConfig = z.infer<typeof ManualConfigSchema>;
+
+// runtime: cloud-evaluated (no agent).
+//
+// Heartbeat / dead-man's-switch monitoring. A cron job, backup or worker
+// pings a per-check URL (/api/heartbeat/<token>); the cloud flags the check
+// when the next success ping is late or a run reports failure. The ping
+// token is NOT part of source_config (it lives in heartbeat_checks, never
+// exported) so config-as-code documents carry no capability.
+//
+// period_seconds       expected interval between successful runs.
+// grace_seconds        extra slack after the period before the check is late.
+// max_runtime_seconds  optional: a run that pinged /start and has not
+//                      finished within this many seconds is unhealthy.
+//
+// Cron expressions are not accepted yet: the cloud ships no cron parser,
+// so a schedule is expressed as its period (a daily 02:00 job = 86400).
+export const HEARTBEAT_PERIOD_MIN_SECONDS = 60;
+export const HEARTBEAT_PERIOD_MAX_SECONDS = 31 * 24 * 3600; // a monthly job
+export const HEARTBEAT_GRACE_MAX_SECONDS = 7 * 24 * 3600;
+export const HEARTBEAT_RUNTIME_MAX_SECONDS = 7 * 24 * 3600;
+export const HEARTBEAT_GRACE_DEFAULT_SECONDS = 300;
+export const HeartbeatConfigSchema = z
+  .object({
+    period_seconds: z
+      .number()
+      .int()
+      .min(HEARTBEAT_PERIOD_MIN_SECONDS, `period_seconds must be at least ${HEARTBEAT_PERIOD_MIN_SECONDS}`)
+      .max(HEARTBEAT_PERIOD_MAX_SECONDS, `period_seconds must be at most ${HEARTBEAT_PERIOD_MAX_SECONDS} (31 days)`),
+    grace_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(HEARTBEAT_GRACE_MAX_SECONDS, `grace_seconds must be at most ${HEARTBEAT_GRACE_MAX_SECONDS} (7 days)`)
+      .default(HEARTBEAT_GRACE_DEFAULT_SECONDS),
+    max_runtime_seconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(HEARTBEAT_RUNTIME_MAX_SECONDS, `max_runtime_seconds must be at most ${HEARTBEAT_RUNTIME_MAX_SECONDS} (7 days)`)
+      .optional(),
+  })
+  .strict();
+export type HeartbeatConfig = z.infer<typeof HeartbeatConfigSchema>;
 
 // runtime: shipped
 //

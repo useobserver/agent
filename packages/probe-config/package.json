@@ -12,8 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "jsonpath-plus": "^10.3.0",
-    "zod": "^3.25.76"
+    "jsonpath-plus": "^11.1.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@observer/tsconfig": "workspace:*"

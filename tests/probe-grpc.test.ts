@@ -203,14 +203,20 @@ describe("execute — invalid metadata never leaks the value", () => {
 
   it("schema rejects metadata values with CR/LF/control characters", () => {
     expect(
-      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer a\nb" } }),
+      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { "x-tenant": "acme\nb" } }),
     ).not.toBeNull();
     expect(
-      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer a\rb" } }),
+      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { "x-tenant": "acme\rb" } }),
     ).not.toBeNull();
     expect(
-      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer abc123" } }),
+      grpcSource.validateConfig({ host: "x", port: 50051, metadata: { "x-tenant": "acme" } }),
     ).toBeNull();
+  });
+
+  it("schema rejects credential-looking inline metadata keys (they belong in metadata_refs)", () => {
+    const err = grpcSource.validateConfig({ host: "x", port: 50051, metadata: { authorization: "Bearer abc123" } });
+    expect(err).not.toBeNull();
+    expect(err).not.toContain("abc123");
   });
 });
 

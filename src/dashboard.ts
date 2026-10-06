@@ -47,6 +47,7 @@ const ENV_ALLOWLIST: ReadonlyArray<string | RegExp> = [
   "NODE_ENV",
   /^PROMETHEUS_/,
   /^DEBUG_DASHBOARD_/,
+  /^HEARTBEAT_RELAY_/,
 ];
 
 function isAllowed(key: string): boolean {

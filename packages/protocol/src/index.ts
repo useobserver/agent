@@ -4,11 +4,19 @@
 //   - Heartbeat shape + health alert state machine
 //   - Push payload + status verdict types
 //   - Metric definition projection
+//   - Heartbeat ping parsing + the agent heartbeat-relay batch
 //
 // Zero runtime dependencies; types + pure functions only. Safe to
 // publish to npm for the public agent mirror.
 
-export type { HeartbeatPayload, HealthAlertState, OtlpReceiverStatsSnapshot, CustomProbeDescriptor, AgentBuildInfo } from "./heartbeat";
+export type {
+  HeartbeatPayload,
+  HeartbeatResponse,
+  HealthAlertState,
+  OtlpReceiverStatsSnapshot,
+  CustomProbeDescriptor,
+  AgentBuildInfo,
+} from "./heartbeat";
 export {
   LAG_QUEUE_DEPTH_THRESHOLD,
   LAG_OLDEST_AGE_SECONDS_THRESHOLD,
@@ -29,6 +37,7 @@ export type { Source, SourceInstance, SourceMode } from "./source";
 export { asPullSource } from "./source";
 
 export type { SourceType, MetricDefinition } from "./definition";
+export { DEFINITIONS_VERSION_HEADER } from "./definition";
 
 export type { StartedAtClass, DuplicateKeyState } from "./agent-health";
 export {
@@ -42,3 +51,21 @@ export {
   duplicateTick,
   DUPLICATE_CLEAR_MS,
 } from "./agent-health";
+
+export type {
+  HeartbeatPingKind,
+  ParsedHeartbeatPing,
+  HeartbeatRelayPing,
+  HeartbeatRelayBatch,
+  HeartbeatRelayRejectCode,
+  HeartbeatRelayResponse,
+} from "./heartbeat-relay";
+export {
+  HEARTBEAT_BODY_MAX_BYTES,
+  HEARTBEAT_RELAY_CLOUD_PATH,
+  HEARTBEAT_RELAY_MAX_BATCH,
+  HEARTBEAT_RELAY_MAX_AGE_MS,
+  isWellFormedHeartbeatToken,
+  redactHeartbeatToken,
+  parseHeartbeatPingPath,
+} from "./heartbeat-relay";

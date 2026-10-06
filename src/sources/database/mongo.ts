@@ -11,7 +11,7 @@
 
 import crypto from "node:crypto";
 import { MongoClient, type MongoClientOptions } from "mongodb";
-import { checkMongoQuery } from "./_mongo-check.ts";
+import { checkMongoQuery } from "@observer/probe-config";
 
 export interface MongoQueryResult {
   ok: true;

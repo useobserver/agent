@@ -91,7 +91,7 @@ export function getSourceClass(sourceType: string): Source<any> | undefined {
 // pollingJob/pushJob calls `execute()` on a cron tick; for push
 // sources we lazily init() the SourceInstance on first hit and reuse
 // it for every subsequent read. The metric-definition refresh loop
-// (see ../index.ts:pollDefinitions) calls `disposeForMetric()` when a
+// (see ../index.ts:applyDefinitions) calls `disposeForMetric()` when a
 // definition disappears.
 //
 // We store the in-flight init promise (not the resolved instance) so

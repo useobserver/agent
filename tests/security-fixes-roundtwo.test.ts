@@ -2,8 +2,7 @@
 import { describe, expect, it } from "bun:test";
 import { evaluate } from "../src/evaluator.ts";
 import { evaluateOperation, evaluateStatus } from "../src/status.ts";
-import { checkSelectOnly } from "../src/sources/database/_query-check.ts";
-import { checkMongoQuery } from "../src/sources/database/_mongo-check.ts";
+import { checkMongoQuery, checkSelectOnly } from "@observer/probe-config";
 import { attributesFingerprint } from "../src/sources/otlp/decode.ts";
 import { resolveBufferCap } from "../src/buffer.ts";
 

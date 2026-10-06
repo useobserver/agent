@@ -1,7 +1,7 @@
 // MongoDB query JSON validator tests.
 
 import { describe, expect, it } from "bun:test";
-import { checkMongoQuery } from "../src/sources/database/_mongo-check.ts";
+import { checkMongoQuery } from "@observer/probe-config";
 
 describe("checkMongoQuery — accepts", () => {
   it("countDocuments without filter", () => {

@@ -17,6 +17,7 @@
 import type { ProbeResult, ProbeSource } from "../types.ts";
 import { WebsocketConfigSchema, type WebsocketConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { redactSecrets, resolveHeaderRefs } from "./_header-refs.ts";
 
 export function validateConfig(config: unknown): null | string {
   return validateWithSchema(WebsocketConfigSchema, config);
@@ -32,7 +33,14 @@ interface WsOutcome {
 
 type BunWebSocketOptions = { headers?: Record<string, string>; protocols?: string[] };
 
-function openProbe(config: WebsocketConfig): Promise<WsOutcome> {
+// `headers` is the merged set (inline + resolved header_refs);
+// `secretValues` are the resolved secrets, scrubbed from any error text
+// that rides back in metadata.error.
+function openProbe(
+  config: WebsocketConfig,
+  headers: Record<string, string>,
+  secretValues: readonly string[],
+): Promise<WsOutcome> {
   const timeoutMs = config.timeout_ms ?? 10_000;
   const pingMode = config.ping_mode ?? "none";
   return new Promise<WsOutcome>((resolve) => {
@@ -63,10 +71,10 @@ function openProbe(config: WebsocketConfig): Promise<WsOutcome> {
         config.url,
         // Bun-specific options bag; cast through unknown so lib.dom's
         // (url, protocols) signature doesn't reject it.
-        ({ headers: config.headers, protocols: config.protocols } as BunWebSocketOptions) as unknown as string[],
+        ({ headers, protocols: config.protocols } as BunWebSocketOptions) as unknown as string[],
       );
     } catch (e) {
-      finish({ status: "open_failed", errorCode: (e as Error).message });
+      finish({ status: "open_failed", errorCode: redactSecrets(String((e as Error)?.message ?? ""), secretValues) });
       return;
     }
 
@@ -77,7 +85,11 @@ function openProbe(config: WebsocketConfig): Promise<WsOutcome> {
         try {
           ws.send(config.send_message);
         } catch (e) {
-          finish({ status: "open_failed", handshakeMs: openedAt - start, errorCode: (e as Error).message });
+          finish({
+            status: "open_failed",
+            handshakeMs: openedAt - start,
+            errorCode: redactSecrets(String((e as Error)?.message ?? ""), secretValues),
+          });
         }
         return;
       }
@@ -115,7 +127,23 @@ function openProbe(config: WebsocketConfig): Promise<WsOutcome> {
 export async function execute(config: WebsocketConfig): Promise<ProbeResult> {
   const ts = (): string => new Date().toISOString();
   const interpretation = config.interpretation ?? "handshake_latency";
-  const outcome = await openProbe(config);
+
+  // Secret handshake headers: header_refs names env vars on this host,
+  // merged over the inline headers. Unset ref -> typed no_data (even for
+  // connection_success: a probe that can't authenticate isn't measuring
+  // the endpoint). Only names reach metadata, never values.
+  const resolved = resolveHeaderRefs(config.headers, config.header_refs);
+  if (!resolved.ok) {
+    return {
+      value: null,
+      timestamp: ts(),
+      status_hint: "no_data",
+      reason: resolved.reason,
+      metadata: { interpretation, header: resolved.header, header_ref: resolved.ref },
+    };
+  }
+
+  const outcome = await openProbe(config, resolved.headers, resolved.secretValues);
 
   const metadata: Record<string, unknown> = {
     interpretation,
