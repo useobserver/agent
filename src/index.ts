@@ -21,6 +21,7 @@ import {
   startRelayServer,
   type RelayServer,
 } from "./heartbeat-relay.ts";
+import { AGENT_SUSPENDED_CODE, cloudErrorCode, createSuspendedNotice } from "./cloud-errors.ts";
 import type {
   BufferAccess,
   DashboardSnapshot,
@@ -248,6 +249,11 @@ function classifyNoDataReason(error: unknown): string {
 
 // ───────────────────────── Cloud HTTP ────────────────────────────────
 
+// Throttled, explicit log line for 403 agent_suspended_plan (see cloud-errors.ts).
+const suspendedNotice = createSuspendedNotice((level, message) => {
+  void log(level, message);
+});
+
 async function cloudFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const url = `${CLOUD_SERVER_URL.replace(/\/$/, "")}${path}`;
   const headers: HeadersInit = {
@@ -285,11 +291,20 @@ async function cloudFetch(path: string, init: RequestInit = {}): Promise<Respons
     throw err;
   }
   if (!res.ok) {
-    res.body?.cancel().catch(() => {});
-    const err = new Error(`HTTP ${res.status}`) as Error & { status?: number };
+    let code: string | null = null;
+    if (res.status === 403) {
+      // Small JSON body; read it to tell a plan suspension from a scope 403.
+      code = cloudErrorCode(await res.text().catch(() => null));
+    } else {
+      res.body?.cancel().catch(() => {});
+    }
+    const err = new Error(code ? `HTTP ${res.status} ${code}` : `HTTP ${res.status}`) as Error & { status?: number; code?: string };
     err.status = res.status;
+    if (code) err.code = code;
+    if (code === AGENT_SUSPENDED_CODE) suspendedNotice.note();
     throw err;
   }
+  suspendedNotice.reset();
   return res;
 }
 
