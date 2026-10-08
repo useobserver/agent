@@ -12,7 +12,7 @@ import type { ProbeResult, ProbeSource } from "../types.ts";
 import { HttpConfigSchema, type HttpConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
 import { parseAndExtract } from "./_json-path.ts";
-import { hasMtls, isCertExpiringSoon, loadMtlsMaterial, type MtlsMaterial } from "./_mtls.ts";
+import { hasMtls, isCertExpiringSoon, loadMtlsMaterial, loadPemRef, type MtlsMaterial } from "./_mtls.ts";
 import { resolveHeaderRefs } from "./_header-refs.ts";
 
 const BODY_PREVIEW_BYTES = 4096;
@@ -101,6 +101,21 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
     tlsOptions.cert = mtls.cert;
     tlsOptions.key = mtls.key;
     if (mtls.ca) tlsOptions.ca = mtls.ca;
+  } else if (config.ca_cert_ref) {
+    // A private CA for a plain HTTPS target (no client cert). Before
+    // 1.6.1 ca_cert_ref was only read on the mTLS path, so a probe that
+    // set it alone silently used the system trust store.
+    const ca = loadPemRef(config.ca_cert_ref, process.env);
+    if (!ca.ok) {
+      return {
+        value: null,
+        timestamp: ts(),
+        status_hint: "no_data",
+        reason: ca.reason,
+        metadata: { ca_cert_ref: config.ca_cert_ref },
+      };
+    }
+    tlsOptions.ca = ca.pem;
   }
 
   const controller = new AbortController();

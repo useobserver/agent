@@ -1,6 +1,6 @@
 {
   "name": "observer-agent",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Observer agent: probes metric sources, pushes results to Observer Cloud.",
   "license": "Apache-2.0",
   "main": "src/index.ts",

@@ -104,3 +104,31 @@ describe("execute — success and failure shapes", () => {
     expect(r.status_hint).toBeUndefined();
   });
 });
+
+describe("execute — ca_cert_ref without a client certificate", () => {
+  const PEM = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n";
+
+  it("a missing ca_cert_ref env var is no_data, not a silent system-trust fallback", async () => {
+    delete process.env.OBS_TEST_CA_MISSING;
+    const r = await execute({ url: `${baseUrl}/healthy`, ca_cert_ref: "OBS_TEST_CA_MISSING" });
+    expect(r.status_hint).toBe("no_data");
+    expect(r.reason).toBe("mtls_ref_missing");
+    expect(r.metadata?.ca_cert_ref).toBe("OBS_TEST_CA_MISSING");
+  });
+
+  it("an unreadable CA file path is no_data", async () => {
+    process.env.OBS_TEST_CA_PATH = "/nonexistent/ca.pem";
+    const r = await execute({ url: `${baseUrl}/healthy`, ca_cert_ref: "OBS_TEST_CA_PATH" });
+    expect(r.status_hint).toBe("no_data");
+    expect(r.reason).toBe("mtls_file_unreadable");
+    delete process.env.OBS_TEST_CA_PATH;
+  });
+
+  it("an inline PEM loads and the probe runs", async () => {
+    process.env.OBS_TEST_CA_PEM = PEM;
+    const r = await execute({ url: `${baseUrl}/healthy`, ca_cert_ref: "OBS_TEST_CA_PEM" });
+    expect(r.status_hint).toBeUndefined();
+    expect(r.metadata?.status).toBe(200);
+    delete process.env.OBS_TEST_CA_PEM;
+  });
+});
