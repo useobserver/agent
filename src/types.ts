@@ -27,6 +27,12 @@ export interface AgentEnv {
   prometheusBasicAuthEnabled?: boolean;
   prometheusUsername?: string;
   prometheusPassword?: string;
+  /** PROMETHEUS_BEARER_TOKEN: Authorization: Bearer (exclusive with basic auth). */
+  prometheusBearerToken?: string;
+  /** PROMETHEUS_TENANT_ID: X-Scope-OrgID (Grafana Mimir / Cortex). */
+  prometheusTenantId?: string;
+  /** PROMETHEUS_HEADERS raw: JSON object or "Name: value; Name2: value". */
+  prometheusHeaders?: string;
   prometheusTimeoutMs?: number;
 }
 

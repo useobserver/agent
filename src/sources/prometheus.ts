@@ -3,6 +3,7 @@
 import type { AgentEnv, ProbeResult, ProbeSource } from "../types.ts";
 import { PrometheusConfigSchema, type PrometheusConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { buildPrometheusHeaders, prometheusQueryUrl } from "./prometheus-auth.ts";
 
 function classifyHttpError(error: unknown, status?: number): string {
   if (status === 401 || status === 403) return "Unauthorized";
@@ -35,17 +36,19 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
   // the dispatcher relies on.
   let queryUrl: URL;
   try {
-    queryUrl = new URL(`${url.replace(/\/$/, "")}/api/v1/query`);
+    queryUrl = prometheusQueryUrl(url, config.query);
   } catch {
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: "invalid_prometheus_url" };
   }
-  queryUrl.searchParams.set("query", config.query);
 
-  const headers: Record<string, string> = {};
-  if (env.prometheusBasicAuthEnabled && env.prometheusUsername && env.prometheusPassword) {
-    const basic = Buffer.from(`${env.prometheusUsername}:${env.prometheusPassword}`).toString("base64");
-    headers.Authorization = `Basic ${basic}`;
+  // Auth + tenant + extra headers. A misconfiguration (bearer AND basic, bad
+  // PROMETHEUS_HEADERS) is a typed no_data, never a throw; index.ts logs the
+  // explanation once at boot.
+  const built = buildPrometheusHeaders(env);
+  if (!built.ok) {
+    return { value: null, timestamp: ts(), status_hint: "no_data", reason: built.reason };
   }
+  const headers = built.headers;
 
   const controller = new AbortController();
   const timeoutMs = env.prometheusTimeoutMs ?? 10_000;

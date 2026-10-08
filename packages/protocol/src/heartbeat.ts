@@ -49,6 +49,10 @@ export interface HeartbeatPayload {
   // boundary. channel: "official" (build-info.json baked by the public
   // image CI), "source" (running from a checkout, hash computed at boot).
   build?: AgentBuildInfo;
+  // The agent host's hostname (os.hostname()). Optional; older agents omit
+  // it. The console offers it as a one-click name for an agent still on
+  // its auto-assigned "agent-N" name. Self-reported, display only.
+  hostname?: string;
 }
 
 export interface AgentBuildInfo {

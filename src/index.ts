@@ -8,6 +8,7 @@ import { createDrainController } from "./drain.ts";
 import { startDashboard, maskEnv } from "./dashboard.ts";
 import { getOtlpReceiver } from "./sources/otlp/receiver.ts";
 import sources from "./sources/index.ts";
+import { buildPrometheusHeaders, describePrometheusAuth } from "./sources/prometheus-auth.ts";
 import { describeCustomProbes } from "./sources/custom/registry.ts";
 import { getBuildInfo } from "./build-info.ts";
 import { evaluate } from "./evaluator.ts";
@@ -61,6 +62,9 @@ const {
   PROMETHEUS_BASIC_AUTH_ENABLED = DEFAULT_PROMETHEUS_BASIC_AUTH_ENABLED,
   PROMETHEUS_USERNAME = DEFAULT_PROMETHEUS_USERNAME,
   PROMETHEUS_PASSWORD = DEFAULT_PROMETHEUS_PASSWORD,
+  PROMETHEUS_BEARER_TOKEN,
+  PROMETHEUS_TENANT_ID,
+  PROMETHEUS_HEADERS,
   VERBOSE = DEFAULT_VERBOSE,
   BROADCAST_LOGS = DEFAULT_BROADCAST_LOGS,
   LOG_BROADCAST_LEVEL = DEFAULT_LOG_BROADCAST_LEVEL,
@@ -83,6 +87,22 @@ if (!PROMETHEUS_SERVER_URL) {
     "[WARN] PROMETHEUS_SERVER_URL not set — prometheus-type metrics will report no_data; " +
       "active probes (http, tcp, dns, ...) work normally.",
   );
+}
+// Prometheus auth: explain a misconfiguration once, at boot, by variable
+// name only (values are credentials). Probes report the matching no_data
+// reason (prometheus_auth_conflict / prometheus_headers_invalid) until fixed.
+if (PROMETHEUS_SERVER_URL) {
+  const promAuth = {
+    prometheusBasicAuthEnabled: PROMETHEUS_BASIC_AUTH_ENABLED === "true",
+    prometheusUsername: PROMETHEUS_USERNAME,
+    prometheusPassword: PROMETHEUS_PASSWORD,
+    prometheusBearerToken: PROMETHEUS_BEARER_TOKEN,
+    prometheusTenantId: PROMETHEUS_TENANT_ID,
+    prometheusHeaders: PROMETHEUS_HEADERS,
+  };
+  const built = buildPrometheusHeaders(promAuth);
+  if (!built.ok) console.error(`[ERROR] Prometheus auth: ${built.error}`);
+  else console.log(`[INFO] Prometheus auth: ${describePrometheusAuth(promAuth)}`);
 }
 if (!AGENT_KEY) {
   console.error("[ERROR] AGENT_KEY is mandatory.");
@@ -425,6 +445,7 @@ const sendHeartbeat = async (): Promise<void> => {
       ...(otlpStats ? { otlp_stats: otlpStats } : {}),
       custom_probes: customProbes,
       build: getBuildInfo(),
+      hostname: os.hostname(),
     };
     const res = await cloudFetch("/api/agent/heartbeat", { method: "POST", body: JSON.stringify(payload) });
     lastHeartbeatAt = new Date().toISOString();
@@ -550,11 +571,17 @@ const sourceEnv = (): {
   prometheusBasicAuthEnabled: boolean;
   prometheusUsername?: string;
   prometheusPassword?: string;
+  prometheusBearerToken?: string;
+  prometheusTenantId?: string;
+  prometheusHeaders?: string;
 } => ({
   prometheusUrl: PROMETHEUS_SERVER_URL,
   prometheusBasicAuthEnabled: PROMETHEUS_BASIC_AUTH_ENABLED === "true",
   prometheusUsername: PROMETHEUS_USERNAME,
   prometheusPassword: PROMETHEUS_PASSWORD,
+  prometheusBearerToken: PROMETHEUS_BEARER_TOKEN,
+  prometheusTenantId: PROMETHEUS_TENANT_ID,
+  prometheusHeaders: PROMETHEUS_HEADERS,
 });
 
 function probeLabel(definition: MetricDefinition): string {
