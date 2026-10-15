@@ -23,6 +23,10 @@ export const PROBE_TYPES = Object.freeze([
   // Cloud-evaluated, agentless: jobs ping a per-check URL and the cloud
   // flags them late / failed (apps/web lib/heartbeat).
   "heartbeat",
+  // Cloud-evaluated, agentless: status derived from inbound alerts
+  // (Alertmanager, Grafana, Datadog, CloudWatch, generic JSON) routed by the
+  // cloud's intake rules (apps/web lib/alert-intake). Never sent to an agent.
+  "alert",
 ] as const);
 
 export type ProbeType = (typeof PROBE_TYPES)[number];

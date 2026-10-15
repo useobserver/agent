@@ -35,17 +35,19 @@ export interface CustomConfigValidator {
 
 export interface CustomProbe {
   name: string;
+  // Local only: never sent to the cloud (agent 1.7.0+). Kept so existing
+  // probe files that set it keep compiling.
   description?: string;
   configSchema?: CustomConfigValidator;
   run(ctx: CustomProbeContext): Promise<CustomProbeResult> | CustomProbeResult;
 }
 
 // What the agent reports to the cloud on heartbeat. The probe function
-// itself is never serialised — only its name, description, and whether
-// it declares a config schema.
+// itself is never serialised, and neither is its description (agent
+// 1.7.0+): only its name and whether it declares a config schema. A
+// description stays on this host, for the probe author's own reference.
 export interface CustomProbeDescriptor {
   name: string;
-  description?: string;
   has_config_schema: boolean;
 }
 
@@ -80,7 +82,6 @@ export function getCustomProbe(name: string): CustomProbe | undefined {
 export function describeCustomProbes(): CustomProbeDescriptor[] {
   return [...registry.values()].map((p) => ({
     name: p.name,
-    ...(p.description ? { description: p.description } : {}),
     has_config_schema: Boolean(p.configSchema),
   }));
 }

@@ -18,12 +18,15 @@ export interface OtlpReceiverStatsSnapshot {
 }
 
 // one entry per custom probe registered on the agent. The
-// probe function is never serialised; only its name, description, and
-// whether it declares a config schema. The console populates the
-// custom-probe dropdown from the latest heartbeat's list.
+// probe function is never serialised; only its name and whether it
+// declares a config schema. The console populates the custom-probe
+// dropdown from the latest heartbeat's list.
+//
+// Agent 1.7.0+ no longer sends the probe's `description` (it stays on the
+// agent host). Agents up to 1.6.x still send it; the cloud accepts the
+// field and discards it, so it is neither stored nor shown.
 export interface CustomProbeDescriptor {
   name: string;
-  description?: string;
   has_config_schema: boolean;
 }
 

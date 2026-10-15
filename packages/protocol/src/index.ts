@@ -69,3 +69,45 @@ export {
   redactHeartbeatToken,
   parseHeartbeatPingPath,
 } from "./heartbeat-relay";
+
+export type {
+  ProberSourceType,
+  ProberCheck,
+  ProberChecksResponse,
+  ProberResultItem,
+  ProberResultsRequest,
+  ProberResultsResponse,
+} from "./prober";
+export {
+  PROBER_CHECKS_PATH,
+  PROBER_RESULTS_PATH,
+  PROBER_KEY_HEADER,
+  PROBER_KEY_PREFIX,
+  PROBER_CAPABILITIES_HEADER,
+  PROBER_VERSION_HEADER,
+  PROBER_CHECKS_VERSION_HEADER,
+  PROBER_RESULTS_MAX_BATCH,
+} from "./prober";
+
+export type {
+  AgentJobKind,
+  ProbeTestSourceType,
+  ProbeTestPayload,
+  ProbeTestResult,
+  CloudwatchListMetricsPayload,
+  CloudwatchListMetricsResult,
+  AgentJob,
+  AgentJobsClaimResponse,
+  AgentJobResultBody,
+} from "./jobs";
+export {
+  AGENT_JOBS_CLAIM_PATH,
+  AGENT_JOB_KINDS,
+  PROBE_TEST_SOURCE_TYPES,
+  PROBE_TEST_TIMEOUT_MS,
+  agentJobResultPath,
+  isAgentJobKind,
+  isProbeTestSourceType,
+  sanitizeProbeTestResult,
+  sanitizeReasonCode,
+} from "./jobs";

@@ -18,9 +18,12 @@ The data-plane companion to [Observer](https://use.observer). The agent
 probes metric sources inside your network, evaluates each verdict
 locally, and pushes the result to Observer Cloud over a single outbound
 HTTPS connection. The agent sends readings and verdicts (with a reason
-code) plus a health heartbeat. Credentials, connection strings, and raw
+code) plus a health heartbeat about itself (agent version and build,
+uptime, host name, queue depth, active source types, and the names of
+custom probes; their descriptions stay on the host). Credentials, connection strings, and raw
 query responses stay on the host. Log forwarding (`BROADCAST_LOGS`) is
-off by default.
+off by default. When you browse CloudWatch metrics in the console, the
+agent returns metric names and dimensions, no values.
 
 ```
 ┌─────────────────┐   probe (5-60s)   ┌──────────────┐    push (verdicts)     ┌──────────────┐
@@ -163,11 +166,17 @@ host and never sent to the cloud.
 
 ## Security and privacy
 
-- **Readings and verdicts only.** Each push carries `{ metric_id,
-  value, status, timestamp }` plus an optional reason code, and the
-  agent sends a health heartbeat. Credentials, connection strings, and
-  raw query responses stay on your host; query strings are
-  sha256-prefixed in any logs.
+- **Readings, verdicts and agent telemetry.** Each push carries
+  `{ metric_id, value, status, timestamp }` plus an optional reason
+  code. Every 30 seconds the agent sends a heartbeat about itself:
+  version and build, uptime, host name (`os.hostname()`), queue depth
+  and age, active source types, and the names of custom probes (from
+  1.7.0 a probe's description stays on the host). Credentials, connection strings, and raw query
+  responses stay on your host; query strings are sha256-prefixed in
+  any logs.
+- **CloudWatch browsing returns names only.** When you browse CloudWatch
+  metrics in the console, the agent runs `ListMetrics` with the host's
+  AWS credentials and returns metric names and dimensions, no values.
 - **Secrets stay local.** Connection strings, AWS credentials, client
   keys, and auth headers (`header_refs` / `metadata_refs`) are read from
   named env vars on the host and never sent to the cloud.
@@ -416,6 +425,17 @@ Per-metric:
 - else if it matches `unhealthy_*` → `unhealthy`;
 - else `degraded`.
 
+## Managed-prober mode
+
+`src/prober/main.ts` is a separate entry point that Observer uses to run
+hosted outside-in checks from its own locations. You do not need it to
+monitor your own systems. It takes a prober credential (`OBSERVER_PROBER_KEY`,
+`obs_prb_…`), never an agent key, runs only `http`, `tcp`, `dns`, `tls_cert`
+and `icmp` checks, and refuses any target that is not a public address:
+every name is resolved through public resolvers, every answer is checked,
+the connection is pinned to the checked address, and every redirect is
+checked again.
+
 ## Repository layout
 
 ```
@@ -423,6 +443,7 @@ Per-metric:
 ├── src/
 │   ├── index.ts          # Entry: heartbeat, drain loop, probe scheduler
 │   ├── sources/          # Probe runtimes (15 types) + dispatch registry
+│   ├── prober/           # Managed-prober mode (Observer-operated outside-in checks)
 │   ├── evaluator.ts      # Pure threshold evaluation
 │   ├── status.ts         # Strict-operator comparison helpers
 │   ├── buffer.ts         # Durable on-disk queue (bun:sqlite)

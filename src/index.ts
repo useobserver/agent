@@ -23,6 +23,9 @@ import {
   type RelayServer,
 } from "./heartbeat-relay.ts";
 import { AGENT_SUSPENDED_CODE, cloudErrorCode, createSuspendedNotice } from "./cloud-errors.ts";
+import { createJobRunner } from "./jobs/runner.ts";
+import { createProbeTestHandler } from "./jobs/probe-test.ts";
+import { createCloudwatchListMetricsHandler } from "./jobs/cloudwatch-list-metrics.ts";
 import type {
   BufferAccess,
   DashboardSnapshot,
@@ -564,6 +567,24 @@ const startCloudwatchWorkPoller = (): void => {
   setInterval(pollCloudwatchWork, CLOUDWATCH_WORK_POLL_INTERVAL_MS);
 };
 
+// ───────────────────────── Agent job queue ───────────────────────────
+//
+// Typed console → agent jobs (probe tests, CloudWatch ListMetrics), see
+// jobs/runner.ts. Clouds that predate the queue answer 404; the runner then
+// reports unsupported and the legacy CloudWatch poller above takes over.
+const jobRunner = createJobRunner({
+  cloudFetch,
+  handlers: {
+    probe_test: createProbeTestHandler({ execute: (def, env) => sources.execute(def, env), env: () => sourceEnv() }),
+    cloudwatch_list_metrics: createCloudwatchListMetricsHandler(),
+  },
+  log: (level, message) => void log(level, message),
+  verbose: isVerbose,
+  onSupportChange: (supported) => {
+    if (!supported && activeSourceTypes.has("cloudwatch")) startCloudwatchWorkPoller();
+  },
+});
+
 // ───────────────────────── Probe scheduling ──────────────────────────
 
 const sourceEnv = (): {
@@ -677,7 +698,9 @@ const applyDefinitions = async (metricDefinitions: MetricDefinition[]): Promise<
   // every agent in the fleet is pure overhead otherwise. Idempotent
   // via the started flag; never stopped once running (a metric-type
   // flip away and back shouldn't churn the poller).
-  if (activeSourceTypes.has("cloudwatch")) {
+  // Since 1.7.0 the job queue carries ListMetrics; the legacy poller runs
+  // only against a cloud that predates the queue (see jobRunner).
+  if (activeSourceTypes.has("cloudwatch") && jobRunner.supported() === false) {
     startCloudwatchWorkPoller();
   }
 
@@ -985,6 +1008,7 @@ function startHeartbeatRelay(): void {
 
 startDrainLoop();
 startHeartbeatLoop();
+jobRunner.start();
 // CloudWatch work poller starts lazily from applyDefinitions when a
 // cloudwatch source is present (F8) — not here.
 
@@ -1012,6 +1036,7 @@ async function shutdown(signal: string): Promise<void> {
   // Stop producers first so nothing enqueues into (or resurrects) the
   // buffer between close() and exit.
   if (heartbeatTimer) clearInterval(heartbeatTimer);
+  jobRunner.stop();
   definitionsRefresher.stop();
   // Stop accepting relay pings; queued ones stay on disk for the next start.
   try {

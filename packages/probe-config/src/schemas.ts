@@ -719,6 +719,15 @@ export const HeartbeatConfigSchema = z
   .strict();
 export type HeartbeatConfig = z.infer<typeof HeartbeatConfigSchema>;
 
+// runtime: cloud-evaluated (no agent).
+//
+// Alert-backed metric: its status is derived from the alerts the cloud's
+// intake mapping rules route to it (firing -> unhealthy or degraded,
+// none firing -> healthy). The routing lives in the cloud's intake rules,
+// not here, so source_config carries nothing.
+export const AlertConfigSchema = z.object({}).strict();
+export type AlertConfig = z.infer<typeof AlertConfigSchema>;
+
 // runtime: shipped
 //
 // Custom probe source. The probe FUNCTION lives in the customer's agent

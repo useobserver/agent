@@ -29,15 +29,18 @@ describe("registry", () => {
     // @ts-expect-error — deliberately malformed
     expect(() => registerCustomProbe({ name: "x" })).toThrow();
   });
-  it("describes probes for the heartbeat without serialising run()", () => {
+  it("describes probes for the heartbeat without serialising run() or the description", () => {
     registerCustomProbe({ name: "a", description: "desc a", run: () => 1 });
     registerCustomProbe({ name: "b", configSchema: { safeParse: () => ({ success: true }) }, run: () => 2 });
     const d = describeCustomProbes();
     expect(d).toEqual([
-      { name: "a", description: "desc a", has_config_schema: false },
+      { name: "a", has_config_schema: false },
       { name: "b", has_config_schema: true },
     ]);
-    expect(JSON.stringify(d)).not.toContain("function");
+    expect(d[0]).not.toHaveProperty("description");
+    const wire = JSON.stringify(d);
+    expect(wire).not.toContain("function");
+    expect(wire).not.toContain("desc a");
   });
 });
 
