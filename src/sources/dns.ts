@@ -4,6 +4,7 @@ import dnsModule from "node:dns";
 import type { ProbeResult, ProbeSource } from "../types.ts";
 import { DnsConfigSchema, type DnsConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { classifyNetError } from "./net-errors.ts";
 
 type RecordType = "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV" | "CAA" | "PTR";
 
@@ -63,12 +64,15 @@ export async function execute(config: DnsConfig): Promise<ProbeResult> {
     }
     return { value: elapsed, timestamp: ts(), metadata: { records: flattenRecords(records) } };
   } catch (error) {
-    const e = error as NodeJS.ErrnoException;
+    // Normalised code only. Never e.message: it is free text (and can
+    // carry the queried name), not a reason code.
+    const n = classifyNetError(error, "dns_error");
     return {
       value: null,
       timestamp: ts(),
       status_hint: "no_data",
-      reason: e.code || e.message || "dns_error",
+      reason: n.reason,
+      ...(n.raw && n.raw !== n.reason ? { metadata: { error_code: n.raw } } : {}),
     };
   }
 }

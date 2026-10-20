@@ -26,6 +26,7 @@ import { AGENT_SUSPENDED_CODE, cloudErrorCode, createSuspendedNotice } from "./c
 import { createJobRunner } from "./jobs/runner.ts";
 import { createProbeTestHandler } from "./jobs/probe-test.ts";
 import { createCloudwatchListMetricsHandler } from "./jobs/cloudwatch-list-metrics.ts";
+import { classifyNetError } from "./sources/net-errors.ts";
 import type {
   BufferAccess,
   DashboardSnapshot,
@@ -259,15 +260,11 @@ function redactQuery(query: unknown): string {
 
 function classifyNoDataReason(error: unknown): string {
   if (!error) return "unknown";
-  const e = error as { status?: number; code?: string; cause?: { code?: string }; name?: string };
+  const e = error as { status?: number };
   if (e?.status === 401 || e?.status === 403) return "Unauthorized";
-  if (e?.code === "ECONNREFUSED") return "ECONNREFUSED";
-  if (e?.code === "ECONNABORTED" || e?.code === "ETIMEDOUT") return "ETIMEDOUT";
-  if (e?.code === "ENOTFOUND" || e?.code === "EAI_AGAIN") return "DNS";
-  if (e?.code) return e.code;
-  if (e?.cause?.code) return e.cause.code;
-  if (e?.name && e.name !== "Error") return e.name;
-  return "AgentInternal";
+  // Normalised network code (Bun and Node agree after this), else a
+  // stable catch-all. Never a raw error name or message.
+  return classifyNetError(error, "AgentInternal").reason;
 }
 
 // ───────────────────────── Cloud HTTP ────────────────────────────────

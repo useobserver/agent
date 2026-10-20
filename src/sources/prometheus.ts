@@ -4,20 +4,21 @@ import type { AgentEnv, ProbeResult, ProbeSource } from "../types.ts";
 import { PrometheusConfigSchema, type PrometheusConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
 import { buildPrometheusHeaders, prometheusQueryUrl } from "./prometheus-auth.ts";
+import { classifyFetchError } from "./net-errors.ts";
 
-function classifyHttpError(error: unknown, status?: number): string {
+function classifyHttpStatus(status: number): string {
   if (status === 401 || status === 403) return "Unauthorized";
   if (status === 400) return "BadQuery";
-  if (typeof status === "number" && status >= 500 && status < 600) return "PromUpstream";
-  const e = error as { code?: string; cause?: { code?: string }; name?: string } | null | undefined;
-  if (e?.code === "ECONNREFUSED") return "ECONNREFUSED";
-  if (e?.code === "ECONNABORTED" || e?.code === "ETIMEDOUT") return "ETIMEDOUT";
-  if (e?.code === "ENOTFOUND" || e?.code === "EAI_AGAIN") return "DNS";
-  if (e?.cause?.code) return e.cause.code;
-  if (e?.code) return e.code;
-  if (e?.name === "AbortError") return "ETIMEDOUT";
-  if (e?.name && e.name !== "Error") return e.name;
-  return "AgentInternal";
+  if (status >= 500 && status < 600) return "PromUpstream";
+  return `unexpected_status:${status}`;
+}
+
+// A thrown error: network codes are normalised (Bun's ConnectionRefused,
+// NXDOMAIN, resets, TLS); a JSON parse failure is a bad response; anything
+// else is an agent-side bug. Never echoes an error name or message.
+async function classifyThrown(error: unknown, url: URL): Promise<string> {
+  if ((error as { name?: string } | null)?.name === "SyntaxError") return "prom_bad_response";
+  return (await classifyFetchError(error, url, "AgentInternal")).reason;
 }
 
 export function validateConfig(config: unknown): null | string {
@@ -57,7 +58,7 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
   try {
     const res = await fetch(queryUrl, { headers, signal: controller.signal });
     if (!res.ok) {
-      return { value: null, timestamp: ts(), status_hint: "no_data", reason: classifyHttpError(null, res.status) };
+      return { value: null, timestamp: ts(), status_hint: "no_data", reason: classifyHttpStatus(res.status), metadata: { status: res.status } };
     }
     const data = (await res.json()) as { data?: { result?: Array<{ value?: [string, string] }> } };
     const result = data?.data?.result;
@@ -89,7 +90,7 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
       timestamp: Number.isFinite(tsNum) ? new Date(tsNum * 1000).toISOString() : ts(),
     };
   } catch (error) {
-    return { value: null, timestamp: ts(), status_hint: "no_data", reason: classifyHttpError(error) };
+    return { value: null, timestamp: ts(), status_hint: "no_data", reason: await classifyThrown(error, queryUrl) };
   } finally {
     // In finally — not right after fetch resolves — so the abort signal
     // also covers the body read (res.json can hang on a stalled stream).

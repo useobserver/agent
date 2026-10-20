@@ -29,6 +29,7 @@ import {
 import tcpSource from "../sources/tcp.ts";
 import dnsSource from "../sources/dns.ts";
 import icmpSource from "../sources/icmp.ts";
+import { classifyNetError } from "../sources/net-errors.ts";
 import { vetHost, type ResolveFn, type Vetted } from "./guard.ts";
 
 const BODY_PREVIEW_BYTES = 4096;
@@ -193,10 +194,11 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
     }
     return { value: elapsed, timestamp: now(), metadata: { status: res.status } };
   } catch (err) {
-    const e = err as { name?: string; code?: string; cause?: { code?: string } };
-    if (e?.name === "AbortError" || controller.signal.aborted) return noData("ETIMEDOUT");
-    // Typed codes only; an error message can echo the URL.
-    return noData(e?.cause?.code ?? e?.code ?? "http_error");
+    if (controller.signal.aborted) return noData("ETIMEDOUT");
+    // Normalised codes only; an error message can echo the URL. The
+    // request went to a vetted IP literal, so Bun's ambiguous
+    // ConnectionRefused needs no DNS disambiguation here.
+    return noData(classifyNetError(err, "http_error").reason);
   } finally {
     clearTimeout(timer);
   }
@@ -251,11 +253,11 @@ export async function proberTlsCert(config: TlsCertConfig, deps: ProberDeps): Pr
       });
       socket.once("error", (err: NodeJS.ErrnoException) => {
         clearTimeout(wall);
-        finish(noData(err.code || "tls_error"));
+        finish(noData(classifyNetError(err, "tls_error").reason));
       });
     } catch (err) {
       clearTimeout(wall);
-      finish(noData((err as NodeJS.ErrnoException).code || "tls_error"));
+      finish(noData(classifyNetError(err, "tls_error").reason));
     }
   });
 }

@@ -1,6 +1,6 @@
 // @ts-nocheck — Phase D follow-up: tighten test types per-file.
 import { describe, expect, it } from "bun:test";
-import { execute, validateConfig } from "../src/sources/host";
+import { darwinUsedPct, execute, parseVmStat, validateConfig } from "../src/sources/host";
 
 // Host-metrics probe runtime. The agent produces these from the
 // host it runs on — no external target/credentials. Linux is first-class
@@ -89,5 +89,77 @@ describe("execute — never throws, returns a numeric value or typed no_data", (
   it("every result carries an ISO timestamp", async () => {
     const r = await execute({ metric: "memory" });
     expect(() => new Date(r.timestamp).toISOString()).not.toThrow();
+  });
+});
+
+// macOS memory: vm_stat-based "Memory Used" (wired + active + compressed),
+// not 1 - os.freemem()/total (which reads ~99% on any Mac).
+const VM_STAT_FIXTURE = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    56005.
+Pages active:                                 217325.
+Pages inactive:                               220309.
+Pages speculative:                               228.
+Pages throttled:                                   0.
+Pages wired down:                             217391.
+Pages purgeable:                                1813.
+"Translation faults":                    22634640393.
+Pages copy-on-write:                      2021429180.
+Pages zero filled:                        6883519490.
+Pages reactivated:                        4629939766.
+Pages purged:                              255773201.
+File-backed pages:                            181448.
+Anonymous pages:                              256414.
+Pages stored in compressor:                   658747.
+Pages occupied by compressor:                 303867.
+Decompressions:                           4542833757.
+Compressions:                             4967504224.
+Pageins:                                   680350651.
+Pageouts:                                    3633286.
+Swapins:                                   159888588.
+Swapouts:                                  185015747.
+`;
+
+describe("parseVmStat / darwinUsedPct", () => {
+  it("parses active, wired, compressor-occupied pages and the header page size", () => {
+    expect(parseVmStat(VM_STAT_FIXTURE)).toEqual({
+      pageSize: 16384,
+      active: 217325,
+      wired: 217391,
+      // "occupied by", not "stored in": physical pages, not logical
+      compressed: 303867,
+    });
+  });
+
+  it("computes Activity Monitor's Memory Used over hw.memsize", () => {
+    const pages = parseVmStat(VM_STAT_FIXTURE);
+    const pct = darwinUsedPct(pages, 16384, 17179869184); // 16 GiB
+    // (217325 + 217391 + 303867) * 16384 / 16 GiB = 70.44%
+    expect(pct).toBeCloseTo(70.44, 1);
+  });
+
+  it("returns null when a required line is missing", () => {
+    expect(parseVmStat("Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 1.\n")).toBeNull();
+    expect(parseVmStat("")).toBeNull();
+  });
+
+  it("works without the page-size header (caller supplies hw.pagesize)", () => {
+    const noHeader = VM_STAT_FIXTURE.split("\n").slice(1).join("\n");
+    const pages = parseVmStat(noHeader);
+    expect(pages.pageSize).toBeNull();
+    expect(darwinUsedPct(pages, 16384, 17179869184)).toBeCloseTo(70.44, 1);
+  });
+
+  it("rejects a non-positive page size or total, and clamps to 100", () => {
+    const pages = parseVmStat(VM_STAT_FIXTURE);
+    expect(darwinUsedPct(pages, 0, 17179869184)).toBeNull();
+    expect(darwinUsedPct(pages, 16384, 0)).toBeNull();
+    expect(darwinUsedPct(pages, 16384, 1024)).toBe(100);
+  });
+
+  it.if(process.platform === "darwin")("memory on macOS returns a vm_stat percentage, not a throw", async () => {
+    const r = await execute({ metric: "memory" });
+    expect(typeof r.value).toBe("number");
+    expect(r.value).toBeGreaterThan(0);
+    expect(r.value).toBeLessThanOrEqual(100);
   });
 });

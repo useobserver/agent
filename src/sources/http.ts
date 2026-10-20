@@ -14,6 +14,7 @@ import { validateWithSchema } from "./_validate.ts";
 import { parseAndExtract } from "./_json-path.ts";
 import { hasMtls, isCertExpiringSoon, loadMtlsMaterial, loadPemRef, type MtlsMaterial } from "./_mtls.ts";
 import { resolveHeaderRefs } from "./_header-refs.ts";
+import { classifyFetchError } from "./net-errors.ts";
 
 const BODY_PREVIEW_BYTES = 4096;
 // 10 MB cap on JSON bodies. Anything larger is almost certainly a
@@ -308,7 +309,8 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
     // the common ones so the operator can tell "my client cert was
     // rejected" from "I couldn't verify the server cert". We classify
     // by the error code only — never echo cert/key bytes.
-    const code = e?.cause?.code ?? e?.code ?? "";
+    const rawCode = e?.cause?.code ?? e?.code;
+    const code = typeof rawCode === "string" ? rawCode : "";
     if (mtls) {
       const tlsReason = classifyTlsError(code, e?.message);
       if (tlsReason) {
@@ -322,21 +324,29 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
       }
       // mTLS active but the error didn't match a known TLS code. Never
       // fall through to e.message here — a TLS / OpenSSL error string
-      // can embed cert subject or chain detail. Use the error code if
-      // present, else a generic reason.
+      // can embed cert subject or chain detail. Use the normalised error
+      // code if there is one, else a generic reason.
+      const n = await classifyFetchError(err, config.url, "mtls_handshake_failed");
       return {
         value: null,
         timestamp: ts(),
         status_hint: "no_data",
-        reason: code || "mtls_handshake_failed",
+        reason: n.reason,
+        ...(n.raw ? { metadata: { error_code: n.raw } } : {}),
       };
     }
     // Typed codes only — never fall back to e.message. A fetch error
     // message can echo the request URL, which may carry userinfo
     // credentials (schema now rejects those, but stale/out-of-band
     // configs can still reach here). Mirrors the mTLS branch above.
-    const reason = code || "http_error";
-    return { value: null, timestamp: ts(), status_hint: "no_data", reason };
+    const n = await classifyFetchError(err, config.url, "http_error");
+    return {
+      value: null,
+      timestamp: ts(),
+      status_hint: "no_data",
+      reason: n.reason,
+      ...(n.raw ? { metadata: { error_code: n.raw } } : {}),
+    };
   } finally {
     clearTimeout(timer);
   }

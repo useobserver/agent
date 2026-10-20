@@ -5,6 +5,7 @@ import net from "node:net";
 import type { ProbeResult, ProbeSource } from "../types.ts";
 import { TlsCertConfigSchema, type TlsCertConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { classifyNetError } from "./net-errors.ts";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MS_PER_DAY = 86_400_000;
@@ -67,11 +68,10 @@ export async function execute(config: TlsCertConfig): Promise<ProbeResult> {
         finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: "ETIMEDOUT" })
       );
       socket.once("error", (err: NodeJS.ErrnoException) =>
-        finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: err.code || "tls_error" })
+        finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: classifyNetError(err, "tls_error").reason })
       );
     } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: e.code || "tls_error" });
+      finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: classifyNetError(err, "tls_error").reason });
     }
   });
 }

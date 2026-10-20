@@ -3,6 +3,14 @@
 export { PROBE_TYPES, type ProbeType } from "./probe-types";
 
 export {
+  PROBE_VALUE_UNITS,
+  probeValueUnit,
+  probeValueUnitInfo,
+  describeProbeValueUnits,
+  type ProbeValueUnit,
+} from "./units";
+
+export {
   DWELL_SECONDS_MIN,
   DWELL_SECONDS_MAX,
   DWELL_BREACH_DEFAULT,

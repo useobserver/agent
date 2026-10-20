@@ -4,6 +4,7 @@ import net from "node:net";
 import type { ProbeResult, ProbeSource } from "../types.ts";
 import { TcpConfigSchema, type TcpConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { classifyNetError } from "./net-errors.ts";
 
 export function validateConfig(config: unknown): null | string {
   return validateWithSchema(TcpConfigSchema, config);
@@ -32,7 +33,7 @@ export async function execute(config: TcpConfig): Promise<ProbeResult> {
       finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: "ETIMEDOUT" })
     );
     socket.once("error", (err: NodeJS.ErrnoException) =>
-      finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: err.code || "tcp_error" })
+      finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: classifyNetError(err, "tcp_error").reason })
     );
   });
 }

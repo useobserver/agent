@@ -12,6 +12,7 @@
 import type { AgentEnv, ProbeResult, ProbeSource } from "../types.ts";
 import { EsConfigSchema, type EsConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { classifyNetError, UNREACHABLE_REASONS as UNREACHABLE } from "./net-errors.ts";
 
 export function validateConfig(config: unknown): null | string {
   return validateWithSchema(EsConfigSchema, config);
@@ -23,11 +24,10 @@ function classifyHttpError(error: unknown, status?: number): string {
   if (status === 400 || status === 422) return "es_query_error";
   if (typeof status === "number" && status >= 500 && status < 600) return "es_server_error";
   const e = error as { code?: string; cause?: { code?: string }; name?: string } | null | undefined;
-  if (e?.name === "AbortError") return "es_timeout";
-  const code = e?.code ?? e?.cause?.code;
-  if (code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "ETIMEDOUT") {
-    return "es_unreachable";
-  }
+  if (e?.name === "AbortError" || e?.name === "TimeoutError") return "es_timeout";
+  // Normalised so Bun's codes (ConnectionRefused for both a refused port
+  // and NXDOMAIN, ConnectionClosed, ...) land here too, not in es_error.
+  if (UNREACHABLE.has(classifyNetError(error, "").reason)) return "es_unreachable";
   return "es_error";
 }
 

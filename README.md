@@ -124,7 +124,11 @@ host and never sent to the cloud.
 - **Bun** >= 1.0 (the agent runs `.ts` directly; no build step). On
   other platforms `host` vitals degrade gracefully to `no_data`.
 - **Linux** is first-class for the `host` source (reads `/proc`);
-  macOS is supported with coarser values.
+  macOS is supported with coarser values. On macOS, memory is
+  Activity Monitor's "Memory Used" (wired + active + compressed pages
+  over physical memory, from `vm_stat` and `sysctl`), not free pages
+  alone; network is Linux only and reports `no_data`
+  (`host_metric_unsupported_platform`) elsewhere.
 - **`ping` plus `CAP_NET_RAW`** on the host for the `icmp` source only
   (not available in the published distroless image).
 

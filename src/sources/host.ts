@@ -11,6 +11,7 @@
 // pull-mode probe with no persistent state. source_config carries NO
 // endpoint or credentials — it always reads the local host.
 
+import { spawnSync } from "node:child_process";
 import { readFile, statfs } from "node:fs/promises";
 import os from "node:os";
 import type { ProbeResult, ProbeSource } from "../types.ts";
@@ -73,7 +74,71 @@ async function cpuPct(): Promise<number | null> {
   return Math.max(0, Math.min(100, (1 - idle / total) * 100));
 }
 
-// --- Memory: used % (MemAvailable on Linux; os fallback elsewhere) ---
+// --- Memory: used % (MemAvailable on Linux; vm_stat on macOS; os fallback) ---
+
+/** Page counts parsed out of macOS `vm_stat` output. */
+export interface VmStatPages {
+  /** From the header ("page size of N bytes"), when present. */
+  pageSize: number | null;
+  active: number;
+  wired: number;
+  /** "Pages occupied by compressor": physical pages the compressor holds. */
+  compressed: number;
+}
+
+/** Parse `vm_stat` output. Returns null when a required line is missing. */
+export function parseVmStat(text: string): VmStatPages | null {
+  const get = (label: string): number | null => {
+    const m = text.match(new RegExp(`^${label}:\\s+(\\d+)\\.?\\s*$`, "m"));
+    return m ? Number(m[1]) : null;
+  };
+  const active = get("Pages active");
+  const wired = get("Pages wired down");
+  const compressed = get("Pages occupied by compressor");
+  if (active == null || wired == null || compressed == null) return null;
+  const ps = text.match(/page size of (\d+) bytes/);
+  return { pageSize: ps ? Number(ps[1]) : null, active, wired, compressed };
+}
+
+/**
+ * macOS "Memory Used" as Activity Monitor shows it: wired + active +
+ * compressed pages over physical memory. os.freemem() on macOS counts only
+ * truly free pages (the kernel keeps almost nothing free on purpose), so
+ * 1 - free/total reads ~99% on a healthy Mac.
+ */
+export function darwinUsedPct(pages: VmStatPages, pageSize: number, totalBytes: number): number | null {
+  if (!(pageSize > 0) || !(totalBytes > 0)) return null;
+  const used = (pages.active + pages.wired + pages.compressed) * pageSize;
+  if (!Number.isFinite(used)) return null;
+  return Math.max(0, Math.min(100, (used / totalBytes) * 100));
+}
+
+// hw.pagesize / hw.memsize do not change while the agent runs.
+let darwinSysctlCache: { pageSize: number; memsize: number } | null = null;
+function darwinSysctl(): { pageSize: number; memsize: number } | null {
+  if (darwinSysctlCache) return darwinSysctlCache;
+  const r = spawnSync("sysctl", ["-n", "hw.pagesize", "hw.memsize"], { encoding: "utf8", timeout: 2_000 });
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  const [pageSize, memsize] = r.stdout.trim().split(/\s+/).map(Number);
+  if (!(pageSize > 0) || !(memsize > 0)) return null;
+  darwinSysctlCache = { pageSize, memsize };
+  return darwinSysctlCache;
+}
+
+function darwinMemPct(): number | null {
+  try {
+    const sys = darwinSysctl();
+    if (!sys) return null;
+    const r = spawnSync("vm_stat", [], { encoding: "utf8", timeout: 2_000 });
+    if (r.status !== 0 || typeof r.stdout !== "string") return null;
+    const pages = parseVmStat(r.stdout);
+    if (!pages) return null;
+    return darwinUsedPct(pages, pages.pageSize ?? sys.pageSize, sys.memsize);
+  } catch {
+    return null;
+  }
+}
+
 async function memPct(): Promise<number | null> {
   if (isLinux) {
     try {
@@ -90,6 +155,11 @@ async function memPct(): Promise<number | null> {
     } catch {
       /* fall through to os */
     }
+  }
+  if (process.platform === "darwin") {
+    const v = darwinMemPct();
+    if (v != null) return v;
+    // fall through to os
   }
   const total = os.totalmem();
   const free = os.freemem();
