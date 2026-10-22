@@ -782,12 +782,16 @@ const applyDefinitions = async (metricDefinitions: MetricDefinition[]): Promise<
         counters.evaluations += 1;
         log("INFO", `Fetching metric: ${label}`);
         try {
+          const probeStartedAt = Date.now();
           const result = await runProbe();
           // Single evaluation entry point: handles no_data, null, and
           // non-finite values uniformly (non-finite → no_data, never a
           // spurious "degraded"). Replaces the inline evaluateStatus + casts.
           const ev = evaluate(definition, result);
           if (ev.status === "no_data") {
+            // Only the latest reason is stored cloud-side; the log is the
+            // history needed to diagnose transient failures.
+            log("WARN", `no_data: ${label} reason=${ev.reason ?? "no_data"} elapsed_ms=${Date.now() - probeStartedAt}`);
             recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
             if (state.lastStatus !== "no_data") {
               // Enqueue BEFORE updating dedup state — if the buffer
@@ -846,9 +850,11 @@ const applyDefinitions = async (metricDefinitions: MetricDefinition[]): Promise<
     // cadence; a silent tick reads as a dead agent.
     const pushJob = scheduleEvery(interval_agent_push, async () => {
       try {
+        const probeStartedAt = Date.now();
         const result = await runProbe();
         const ev = evaluate(definition, result);
         if (ev.status === "no_data") {
+          log("WARN", `no_data: ${label} reason=${ev.reason ?? "no_data"} elapsed_ms=${Date.now() - probeStartedAt}`);
           recordOutcome("no_data", ev.value, ev.timestamp, ev.reason ?? null);
           sendMetricsToCloudServer({
             metric_id: id,
