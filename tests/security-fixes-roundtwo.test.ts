@@ -84,7 +84,7 @@ describe("mongo check (item 10)", () => {
 
 // BUFFER_MAX_ROWS NaN must NOT disable eviction (WAL growth DoS).
 describe("resolveBufferCap (buffer eviction cap guard)", () => {
-  const DEFAULT = 10000;
+  const DEFAULT = 200000;
   it("falls back to the default for a non-numeric env (Number('foo')=NaN)", () => {
     expect(resolveBufferCap(undefined, "foo")).toBe(DEFAULT);
   });

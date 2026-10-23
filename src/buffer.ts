@@ -14,7 +14,11 @@ interface CreateBufferOptions {
   maxRows?: number;
 }
 
-const DEFAULT_BUFFER_MAX_ROWS = 10000;
+// One row = one sample (~300 bytes). 200k rows is ~60 MB on disk and holds a
+// 50-metric, 30s-interval agent's output for ~33 h of cloud outage (10k held
+// ~100 min). The drain posts 100-row batches per 1 s tick, so a full buffer
+// empties in ~35 min after the cloud returns.
+const DEFAULT_BUFFER_MAX_ROWS = 200000;
 
 // Resolve the eviction cap defensively: a non-numeric/empty BUFFER_MAX_ROWS
 // (Number("foo")=NaN, Number("")=0) must NOT disable eviction — that would let
