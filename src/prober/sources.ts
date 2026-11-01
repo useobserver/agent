@@ -52,6 +52,21 @@ export interface ProberDeps {
 }
 
 const now = (): string => new Date().toISOString();
+
+// An error that maps to no known reason reaches the cloud only as the generic
+// "http_error", so the prober log is the one place its type shows. Logged
+// with the error's name and raw code only (never its message, which can echo
+// the target URL), at most once per distinct code every 10 minutes.
+const UNCLASSIFIED_LOG_MS = 10 * 60_000;
+const unclassifiedLogged = new Map<string, number>();
+function logUnclassified(err: unknown, raw: string | undefined): void {
+  const name = String((err as { name?: unknown } | null)?.name ?? "Error").slice(0, 40);
+  const key = `${name}:${raw ?? "-"}`;
+  const last = unclassifiedLogged.get(key) ?? 0;
+  if (Date.now() - last < UNCLASSIFIED_LOG_MS) return;
+  unclassifiedLogged.set(key, Date.now());
+  console.warn(`[WARN] [prober] http check failed with an unclassified error: name=${name} code=${raw ?? "none"}`);
+}
 function noData(reason: string, metadata?: Record<string, unknown>): ProbeResult {
   return { value: null, timestamp: now(), status_hint: "no_data", reason: reason.slice(0, 64), ...(metadata ? { metadata } : {}) };
 }
@@ -198,7 +213,9 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
     // Normalised codes only; an error message can echo the URL. The
     // request went to a vetted IP literal, so Bun's ambiguous
     // ConnectionRefused needs no DNS disambiguation here.
-    return noData(classifyNetError(err, "http_error").reason);
+    const c = classifyNetError(err, "http_error");
+    if (c.reason === "http_error") logUnclassified(err, c.raw);
+    return noData(c.reason);
   } finally {
     clearTimeout(timer);
   }
