@@ -95,6 +95,14 @@ jobs:
             on && /^## / { exit }
             on { print }
           ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          # A prerelease (agent-vX.Y.Z-rc.N) has no section of its own yet: use Unreleased.
+          if ! grep -q '[^[:space:]]' release-notes.md && [[ "$VERSION" == *-* ]]; then
+            awk '
+              $0 ~ "^## Unreleased" { on = 1; next }
+              on && /^## / { exit }
+              on { print }
+            ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          fi
           if ! grep -q '[^[:space:]]' release-notes.md; then
             echo "::error::CHANGELOG.md has no section for $VERSION"
             exit 1
@@ -142,6 +150,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Observer agent ${{ steps.version.outputs.tag }}
           body_path: release-notes.md
+          # An rc tag is a GitHub pre-release and never becomes releases/latest,
+          # which the console's binary snippets and install.sh download.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           fail_on_unmatched_files: true
           files: |
             dist/observer-agent-linux-x64
