@@ -82,13 +82,66 @@ jobs:
           path: dist/*
           retention-days: 30
 
+      # Release notes = this version's section of CHANGELOG.md (human-written
+      # in the monorepo, mirrored as is) + the download/usage block. GitHub's
+      # generated notes are off: they would list mirror sync commits.
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/agent-v')
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v "([ (]|$)" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+          cat >> release-notes.md <<'NOTES'
+
+          Standalone Bun-compiled agent binaries. No runtime install
+          required on the target host. Each binary embeds the Bun
+          runtime + every dependency.
+
+          ## Download
+
+          | Platform        | File                                  |
+          |-----------------|---------------------------------------|
+          | Linux x64       | `observer-agent-linux-x64`            |
+          | Linux arm64     | `observer-agent-linux-arm64`          |
+          | macOS x64       | `observer-agent-darwin-x64`           |
+          | macOS arm64     | `observer-agent-darwin-arm64`         |
+          | Windows x64     | `observer-agent-windows-x64.exe`      |
+
+          Verify with `sha256sum -c SHA256SUMS.txt`.
+
+          ## Usage
+
+          ```sh
+          chmod +x observer-agent-linux-x64
+          AGENT_KEY=obs_live_... \
+          CLOUD_SERVER_URL=https://use.observer \
+          ./observer-agent-linux-x64
+          ```
+
+          `PROMETHEUS_SERVER_URL` is optional; set it only for
+          `prometheus` metrics. The `icmp` source needs `ping` and
+          `CAP_NET_RAW` on the host.
+
+          Runtime args can be forwarded to the embedded Bun runtime
+          via `BUN_OPTIONS`:
+          <https://bun.com/docs/bundler/executables#runtime-arguments-via-bun_options>
+          NOTES
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/agent-v')
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Observer agent ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
+          body_path: release-notes.md
           fail_on_unmatched_files: true
           files: |
             dist/observer-agent-linux-x64
@@ -97,36 +150,3 @@ jobs:
             dist/observer-agent-darwin-arm64
             dist/observer-agent-windows-x64.exe
             dist/SHA256SUMS.txt
-          body: |
-            Standalone Bun-compiled agent binaries. No runtime install
-            required on the target host. Each binary embeds the Bun
-            runtime + every dependency.
-
-            ## Download
-
-            | Platform        | File                                  |
-            |-----------------|---------------------------------------|
-            | Linux x64       | `observer-agent-linux-x64`            |
-            | Linux arm64     | `observer-agent-linux-arm64`          |
-            | macOS x64       | `observer-agent-darwin-x64`           |
-            | macOS arm64     | `observer-agent-darwin-arm64`         |
-            | Windows x64     | `observer-agent-windows-x64.exe`      |
-
-            Verify with `sha256sum -c SHA256SUMS.txt`.
-
-            ## Usage
-
-            ```sh
-            chmod +x observer-agent-linux-x64
-            AGENT_KEY=obs_live_... \
-            CLOUD_SERVER_URL=https://use.observer \
-            ./observer-agent-linux-x64
-            ```
-
-            `PROMETHEUS_SERVER_URL` is optional; set it only for
-            `prometheus` metrics. The `icmp` source needs `ping` and
-            `CAP_NET_RAW` on the host.
-
-            Runtime args can be forwarded to the embedded Bun runtime
-            via `BUN_OPTIONS`:
-            <https://bun.com/docs/bundler/executables#runtime-arguments-via-bun_options>
