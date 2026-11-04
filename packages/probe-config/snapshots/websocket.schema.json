@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "protocols": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "headers": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "header_refs": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      }
+    },
+    "ping_mode": {
+      "default": "none",
+      "type": "string",
+      "enum": [
+        "none",
+        "message"
+      ]
+    },
+    "send_message": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "expect_message": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "timeout_ms": {
+      "default": 10000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 30000
+    },
+    "interpretation": {
+      "default": "handshake_latency",
+      "type": "string",
+      "enum": [
+        "handshake_latency",
+        "round_trip_latency",
+        "connection_success"
+      ]
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "additionalProperties": false
+}

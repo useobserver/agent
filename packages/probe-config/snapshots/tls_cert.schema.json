@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "port": {
+      "default": 443,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "warn_days": {
+      "default": 30,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365
+    },
+    "critical_days": {
+      "default": 7,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 365
+    }
+  },
+  "required": [
+    "host"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,109 @@
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "method": {
+      "default": "GET",
+      "type": "string",
+      "enum": [
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS"
+      ]
+    },
+    "expected_status": {
+      "default": 200,
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          }
+        }
+      ]
+    },
+    "timeout_ms": {
+      "default": 5000,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60000
+    },
+    "headers": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "header_refs": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      }
+    },
+    "body_match": {
+      "type": "string"
+    },
+    "follow_redirects": {
+      "default": true,
+      "type": "boolean"
+    },
+    "verify_tls": {
+      "default": true,
+      "type": "boolean"
+    },
+    "json_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "client_cert_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "client_key_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "ca_cert_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "additionalProperties": false
+}

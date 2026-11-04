@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?!-)[A-Za-z0-9._-]+$"
+    },
+    "count": {
+      "default": 3,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "timeout_ms": {
+      "default": 1000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 5000
+    },
+    "interpretation": {
+      "default": "latency",
+      "type": "string",
+      "enum": [
+        "latency",
+        "packet_loss",
+        "reachability"
+      ]
+    }
+  },
+  "required": [
+    "host"
+  ],
+  "additionalProperties": false
+}

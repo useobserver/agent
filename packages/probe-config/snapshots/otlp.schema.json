@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "metric_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "attribute_filters": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 512
+      }
+    },
+    "aggregation": {
+      "default": "latest",
+      "type": "string",
+      "enum": [
+        "latest",
+        "count",
+        "sum",
+        "mean",
+        "p50",
+        "p95",
+        "p99"
+      ]
+    },
+    "staleness_ms": {
+      "default": 120000,
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 86400000
+    }
+  },
+  "required": [
+    "metric_name"
+  ],
+  "additionalProperties": false
+}

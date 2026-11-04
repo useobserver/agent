@@ -1,0 +1,86 @@
+{
+  "type": "object",
+  "properties": {
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "service": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "tls_mode": {
+      "default": "plaintext",
+      "type": "string",
+      "enum": [
+        "plaintext",
+        "tls",
+        "mtls"
+      ]
+    },
+    "client_cert_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "client_key_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "ca_cert_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "metadata": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[\\x20-\\x7E]*$"
+      }
+    },
+    "metadata_refs": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      }
+    },
+    "timeout_ms": {
+      "default": 5000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 30000
+    },
+    "interpretation": {
+      "default": "health_state",
+      "type": "string",
+      "enum": [
+        "health_state",
+        "latency"
+      ]
+    }
+  },
+  "required": [
+    "host",
+    "port"
+  ],
+  "additionalProperties": false
+}

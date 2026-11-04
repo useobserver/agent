@@ -1,23 +1,29 @@
 // Metric definition: the projection the cloud sends to the agent
 // over /api/agent/metrics-definitions. Wire contract.
 
-export type SourceType =
-  | "prometheus"
-  | "http"
-  | "tcp"
-  | "dns"
-  | "tls_cert"
-  | "icmp"
-  | "grpc"
-  | "websocket"
-  | "mtls_http"
-  | "database"
-  | "otlp"
-  | "cloudwatch"
-  | "custom"
-  | "loki"
-  | "elasticsearch"
-  | "host";
+// Every source type an agent runs. PROBE_TYPES (@observer/probe-config) is
+// this list plus the cloud-evaluated types (CLOUD_EVALUATED_SOURCE_TYPES in
+// ./agent-compat); a test keeps the two aligned.
+export const AGENT_SOURCE_TYPES = Object.freeze([
+  "prometheus",
+  "http",
+  "tcp",
+  "dns",
+  "tls_cert",
+  "icmp",
+  "grpc",
+  "websocket",
+  "mtls_http",
+  "database",
+  "otlp",
+  "cloudwatch",
+  "custom",
+  "loki",
+  "elasticsearch",
+  "host",
+] as const);
+
+export type SourceType = (typeof AGENT_SOURCE_TYPES)[number];
 
 export interface MetricDefinition {
   id: string;

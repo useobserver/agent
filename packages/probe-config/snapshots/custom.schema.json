@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "probe_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "probe_config": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 30000
+    }
+  },
+  "required": [
+    "probe_name"
+  ],
+  "additionalProperties": false
+}

@@ -37,7 +37,19 @@ export type { Source, SourceInstance, SourceMode } from "./source";
 export { asPullSource } from "./source";
 
 export type { SourceType, MetricDefinition } from "./definition";
-export { DEFINITIONS_VERSION_HEADER } from "./definition";
+export { AGENT_SOURCE_TYPES, DEFINITIONS_VERSION_HEADER } from "./definition";
+
+export type { AgentEnvScope, AgentEnvVar } from "./agent-runtime";
+export { AGENT_ENV, AGENT_RUNTIME, agentEnvVar } from "./agent-runtime";
+
+export {
+  MIN_SUPPORTED_AGENT_VERSION,
+  CLOUD_EVALUATED_SOURCE_TYPES,
+  SOURCE_TYPE_MIN_AGENT_VERSION,
+  SOURCE_FIELD_MIN_AGENT_VERSION,
+  compareAgentVersions,
+  agentSupports,
+} from "./agent-compat";
 
 export type { StartedAtClass, DuplicateKeyState } from "./agent-health";
 export {

@@ -1,0 +1,8 @@
+{
+  "method": "GET",
+  "path": "/api/agent/metrics-definitions",
+  "query": {},
+  "has_agent_key": true,
+  "content_type": "application/json",
+  "body": null
+}

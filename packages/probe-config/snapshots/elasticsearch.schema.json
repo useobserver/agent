@@ -1,0 +1,84 @@
+{
+  "type": "object",
+  "properties": {
+    "base_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "index": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "query": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "agg_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "percentile": {
+      "type": "string",
+      "pattern": "^\\d{1,3}(?:\\.\\d+)?$"
+    },
+    "flavor": {
+      "default": "elasticsearch",
+      "type": "string",
+      "enum": [
+        "elasticsearch",
+        "opensearch"
+      ]
+    },
+    "auth_mode": {
+      "default": "none",
+      "type": "string",
+      "enum": [
+        "none",
+        "bearer",
+        "basic",
+        "api_key"
+      ]
+    },
+    "token_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "password_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "api_key_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "timeout_ms": {
+      "default": 10000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 60000
+    }
+  },
+  "required": [
+    "base_url",
+    "index",
+    "query",
+    "agg_name"
+  ],
+  "additionalProperties": false
+}

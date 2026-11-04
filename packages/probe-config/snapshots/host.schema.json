@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "metric": {
+      "type": "string",
+      "enum": [
+        "cpu",
+        "memory",
+        "filesystem",
+        "network",
+        "load"
+      ]
+    },
+    "mountpoint": {
+      "default": "/",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "iface": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "metric"
+  ],
+  "additionalProperties": false
+}

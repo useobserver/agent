@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "period_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 2678400
+    },
+    "grace_seconds": {
+      "default": 300,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 604800
+    },
+    "max_runtime_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 604800
+    }
+  },
+  "required": [
+    "period_seconds"
+  ],
+  "additionalProperties": false
+}
