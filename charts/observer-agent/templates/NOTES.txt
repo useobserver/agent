@@ -1,0 +1,28 @@
+The Observer Agent is starting in namespace {{ .Release.Namespace }}.
+
+1. See it in Observer: open {{ trimSuffix "/" .Values.cloudUrl }}/console and go to Agents.
+   It shows as connected within a minute of the pod becoming Ready.
+
+2. Check the pod and its logs:
+     kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+     kubectl logs -f deploy/{{ include "observer-agent.fullname" . }} -n {{ .Release.Namespace }}
+
+3. Open the agent's local dashboard:
+     kubectl port-forward deploy/{{ include "observer-agent.fullname" . }} 10101 -n {{ .Release.Namespace }}
+   then visit http://127.0.0.1:10101
+
+One agent key = one release. Do not install a second release with the same key:
+Observer accepts results from one running agent per key.
+{{- if not .Values.persistence.enabled }}
+
+Persistence is off: results queued while Observer is unreachable are lost when the pod restarts.
+{{- end }}
+{{- if .Values.heartbeatRelay.enabled }}
+
+Heartbeat relay: http://{{ include "observer-agent.fullname" . }}-relay.{{ .Release.Namespace }}.svc:{{ .Values.heartbeatRelay.port }}
+{{- end }}
+{{- if .Values.otlp.enabled }}
+
+OTLP/HTTP receiver: http://{{ include "observer-agent.fullname" . }}-otlp.{{ .Release.Namespace }}.svc:{{ .Values.otlp.port }}
+(it starts once an otlp metric is assigned to this agent; senders need the bearer token)
+{{- end }}

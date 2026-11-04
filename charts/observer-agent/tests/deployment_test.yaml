@@ -1,0 +1,320 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+  - templates/secret.yaml
+release:
+  name: observer-agent
+chart:
+  version: 0.0.0-test
+  appVersion: 1.7.3
+set:
+  agentKey: obs_live_unittest
+tests:
+  - it: runs exactly one replica with the Recreate strategy
+    template: templates/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: sets only variables from the agent runtime contract
+    # The names below are a subset of AGENT_RUNTIME.env (packages/protocol
+    # agent-runtime.ts). tests/compat-deploy-targets.test.ts in apps/web
+    # checks every ci/*.yaml rendering against the manifest itself.
+    template: templates/deployment.yaml
+    set:
+      prometheus:
+        url: http://prometheus:9090
+        basicAuth: { enabled: true, username: u, passwordSecret: { name: p } }
+        tenantId: t
+        headersSecret: { name: h }
+      bufferMaxRows: "5000"
+      caBundle: { configMap: ca }
+      proxy: { https: "http://p:3128", http: "http://p:3128", noProxy: "a.b" }
+      heartbeatRelay: { enabled: true }
+      otlp: { enabled: true, tokenSecret: { name: otlp } }
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 24
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: AGENT_KEY
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: CLOUD_SERVER_URL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BUFFER_PATH
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: ENABLE_DEBUG_DASHBOARD
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BUN_RUNTIME_TRANSPILER_CACHE_PATH
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: LOG_BROADCAST_LEVEL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: VERBOSE
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BROADCAST_LOGS
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: PROMETHEUS_SERVER_URL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: PROMETHEUS_BASIC_AUTH_ENABLED
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: PROMETHEUS_USERNAME
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: PROMETHEUS_PASSWORD
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: PROMETHEUS_TENANT_ID
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: PROMETHEUS_HEADERS
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BUFFER_MAX_ROWS
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: NODE_EXTRA_CA_CERTS
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HTTPS_PROXY
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HTTP_PROXY
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: NO_PROXY
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HEARTBEAT_RELAY_ENABLED
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HEARTBEAT_RELAY_HOST
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HEARTBEAT_RELAY_PORT
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OBSERVER_OTLP_LISTEN_ADDR
+      - contains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OBSERVER_OTLP_BEARER_TOKEN
+
+  - it: never sets DEBUG_DASHBOARD_HOST
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: DEBUG_DASHBOARD_HOST
+
+  - it: keeps the queue at BUFFER_PATH on /data
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BUFFER_PATH
+            value: /data/observer-agent-buffer.db
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: data
+            mountPath: /data
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENABLE_DEBUG_DASHBOARD
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BUN_RUNTIME_TRANSPILER_CACHE_PATH
+            value: "0"
+
+  - it: applies the security contexts from values
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile: { type: RuntimeDefault }
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: probes run AGENT_RUNTIME.healthExec verbatim
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.exec.command
+          value:
+            - /usr/local/bin/bun
+            - -e
+            - "fetch('http://127.0.0.1:10101/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.exec.command
+          value:
+            - /usr/local/bin/bun
+            - -e
+            - "fetch('http://127.0.0.1:10101/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 30
+
+  - it: defaults the image tag to appVersion
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/useobserver/agent:1.7.3
+
+  - it: uses image.tag when set
+    template: templates/deployment.yaml
+    set:
+      image.tag: "1.7.2"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/useobserver/agent:1.7.2
+
+  - it: lets the digest win over the tag
+    template: templates/deployment.yaml
+    set:
+      image.tag: "1.7.2"
+      image.digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/useobserver/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111
+
+  - it: reads the key from the chart-created Secret
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AGENT_KEY
+            valueFrom:
+              secretKeyRef:
+                name: observer-agent
+                key: AGENT_KEY
+
+  - it: reads the key from existingSecret
+    template: templates/deployment.yaml
+    set:
+      agentKey: ""
+      existingSecret: { name: my-key, key: key }
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AGENT_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-key
+                key: key
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/secret"]
+
+  - it: has a checksum annotation for the chart-created Secret
+    template: templates/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          pattern: ^[a-f0-9]{64}$
+      # sha256 of the Secret rendered with agentKey obs_live_unittest.
+      - equal:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 26fbf08efec316f215da88d5b449775851d7d711ae68f5cad3dbcad99746e286
+
+  - it: changes the checksum when agentKey changes
+    template: templates/deployment.yaml
+    set:
+      agentKey: obs_live_rotated
+    asserts:
+      - notEqual:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          value: 26fbf08efec316f215da88d5b449775851d7d711ae68f5cad3dbcad99746e286
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          pattern: ^[a-f0-9]{64}$

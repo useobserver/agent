@@ -108,6 +108,9 @@ export const AGENT_ENV: readonly AgentEnvVar[] = Object.freeze([
   v("NODE_TLS_REJECT_UNAUTHORIZED", null, "runtime"),
   v("NODE_ENV", null, "runtime"),
   v("BUN_OPTIONS", null, "runtime"),
+  // "0" turns off Bun's on-disk transpiler cache (the Helm chart sets it: the
+  // root filesystem is read-only there).
+  v("BUN_RUNTIME_TRANSPILER_CACHE_PATH", null, "runtime"),
   v("AWS_ACCESS_KEY_ID", null, "runtime", { secret: true }),
   v("AWS_SECRET_ACCESS_KEY", null, "runtime", { secret: true }),
   v("AWS_SESSION_TOKEN", null, "runtime", { secret: true }),

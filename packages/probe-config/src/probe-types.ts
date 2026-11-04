@@ -19,6 +19,12 @@ export const PROBE_TYPES = Object.freeze([
   "loki",
   "elasticsearch",
   "host",
+  // Cloud metric sources (agent 1.8.0): read one value from Datadog, Google
+  // Cloud Monitoring (PromQL) or Azure Monitor with credentials that stay on
+  // the agent host.
+  "datadog",
+  "gcp_monitoring",
+  "azure_monitor",
   "manual",
   // Cloud-evaluated, agentless: jobs ping a per-check URL and the cloud
   // flags them late / failed (apps/web lib/heartbeat).

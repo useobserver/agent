@@ -1,0 +1,91 @@
+{
+  "type": "object",
+  "properties": {
+    "resource_id": {
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^\\/subscriptions\\/[0-9a-fA-F-]{36}\\/resourceGroups\\/[^/]+\\/providers\\/[^/]+\\/.+$"
+    },
+    "metric_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "metric_namespace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "aggregation": {
+      "default": "Average",
+      "type": "string",
+      "enum": [
+        "Average",
+        "Minimum",
+        "Maximum",
+        "Total",
+        "Count"
+      ]
+    },
+    "interval": {
+      "default": "PT1M",
+      "type": "string",
+      "enum": [
+        "PT1M",
+        "PT5M",
+        "PT15M",
+        "PT30M",
+        "PT1H"
+      ]
+    },
+    "filter": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "auth_mode": {
+      "default": "client_secret",
+      "type": "string",
+      "enum": [
+        "client_secret",
+        "managed_identity",
+        "workload_identity"
+      ]
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+    },
+    "client_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+    },
+    "client_secret_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "cloud": {
+      "default": "public",
+      "type": "string",
+      "enum": [
+        "public",
+        "usgov",
+        "china"
+      ]
+    },
+    "timeout_ms": {
+      "default": 10000,
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 30000
+    }
+  },
+  "required": [
+    "resource_id",
+    "metric_name"
+  ],
+  "additionalProperties": false
+}

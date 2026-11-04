@@ -1,0 +1,36 @@
+apiVersion: v2
+name: observer-agent
+description: Observer Agent. Runs your checks inside your network and sends the results to Observer.
+type: application
+# Chart version: independent semver. Bump the patch version with every agent
+# release (together with appVersion) and on chart-only fixes.
+version: 0.1.0
+# The agent version (apps/agent/package.json). tests/chart-version.test.ts enforces it.
+appVersion: "1.7.3"
+kubeVersion: ">=1.29.0-0"
+home: https://use.observer
+sources:
+  - https://github.com/useobserver/agent
+keywords:
+  - observer
+  - monitoring
+  - status-page
+  - uptime
+  - synthetic-monitoring
+maintainers:
+  - name: Observer
+    url: https://use.observer
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://docs.use.observer
+    - name: Source
+      url: https://github.com/useobserver/agent
+  artifacthub.io/changes: |
+    - kind: added
+      description: First release of the Observer Agent chart
+  artifacthub.io/images: |
+    - name: agent
+      image: ghcr.io/useobserver/agent:1.7.3
+  artifacthub.io/containsSecurityUpdates: "false"

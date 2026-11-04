@@ -17,8 +17,8 @@
 //   * Client-cert expiry is surfaced as a warning (probe still runs
 //     until the cert actually fails the handshake).
 
-import { readFileSync } from "node:fs";
 import { X509Certificate } from "node:crypto";
+import { readSecretValue } from "./_secret-value.ts";
 
 export interface MtlsRefs {
   client_cert_ref?: string;
@@ -61,19 +61,11 @@ const MIN_RSA_BITS = 2048;
  * mode without the full cert+key mTLS flow.
  */
 export function loadPemRef(refName: string, env: NodeJS.ProcessEnv): { ok: true; pem: string } | { ok: false; reason: MtlsReason } {
-  const raw = env[refName];
-  if (!raw || raw.length === 0) return { ok: false, reason: "mtls_ref_missing" };
-  if (raw.includes(PEM_MARKER)) {
-    return { ok: true, pem: raw };
-  }
-  // Treat as a filesystem path.
-  try {
-    const pem = readFileSync(raw, "utf8");
-    if (!pem.includes(PEM_MARKER)) return { ok: false, reason: "mtls_cert_parse_failed" };
-    return { ok: true, pem };
-  } catch {
-    return { ok: false, reason: "mtls_file_unreadable" };
-  }
+  // Inline PEM, or a path to a PEM file.
+  const r = readSecretValue(refName, env, (raw) => raw.includes(PEM_MARKER));
+  if (!r.ok) return { ok: false, reason: r.failure === "missing" ? "mtls_ref_missing" : "mtls_file_unreadable" };
+  if (r.source === "file" && !r.value.includes(PEM_MARKER)) return { ok: false, reason: "mtls_cert_parse_failed" };
+  return { ok: true, pem: r.value };
 }
 
 /**

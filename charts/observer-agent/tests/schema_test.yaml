@@ -1,0 +1,75 @@
+suite: values schema
+templates:
+  - templates/deployment.yaml
+  - templates/secret.yaml
+release:
+  name: observer-agent
+tests:
+  - it: rejects neither agentKey nor existingSecret.name
+    asserts:
+      - failedTemplate:
+          errorPattern: "/agentKey': minLength"
+
+  - it: rejects both agentKey and existingSecret.name
+    set:
+      agentKey: obs_live_unittest
+      existingSecret.name: my-key
+    asserts:
+      - failedTemplate:
+          errorPattern: "/agentKey': maxLength"
+
+  - it: accepts agentKey alone
+    set:
+      agentKey: obs_live_unittest
+    template: templates/deployment.yaml
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: accepts existingSecret.name alone
+    set:
+      existingSecret.name: my-key
+    template: templates/deployment.yaml
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: rejects otlp.enabled without otlp.tokenSecret.name
+    set:
+      existingSecret.name: my-key
+      otlp.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "/otlp/tokenSecret/name': minLength"
+
+  - it: rejects basic auth together with a bearer token Secret
+    set:
+      existingSecret.name: my-key
+      prometheus.url: http://prometheus:9090
+      prometheus.basicAuth.enabled: true
+      prometheus.bearerTokenSecret.name: prom-token
+    asserts:
+      - failedTemplate:
+          errorPattern: "/prometheus/bearerTokenSecret/name': maxLength"
+
+  - it: rejects a replicaCount key
+    set:
+      existingSecret.name: my-key
+      replicaCount: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: "additional properties 'replicaCount' not allowed"
+
+  - it: rejects a persistence.size that is not a quantity
+    set:
+      existingSecret.name: my-key
+      persistence.size: lots
+    asserts:
+      - failedTemplate:
+          errorPattern: "/persistence/size': 'lots' does not match pattern"
+
+  - it: accepts a persistence.size quantity
+    set:
+      existingSecret.name: my-key
+      persistence.size: 500Mi
+    template: templates/deployment.yaml
+    asserts:
+      - notFailedTemplate: {}

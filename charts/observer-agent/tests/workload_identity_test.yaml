@@ -1,0 +1,67 @@
+suite: workload identity
+templates:
+  - templates/serviceaccount.yaml
+  - templates/deployment.yaml
+release:
+  name: observer-agent
+set:
+  existingSecret.name: observer-agent
+tests:
+  - it: passes ServiceAccount annotations through (EKS, GKE, Azure)
+    set:
+      serviceAccount.annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/observer-agent
+        iam.gke.io/gcp-service-account: observer-agent@project.iam.gserviceaccount.com
+        azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+    asserts:
+      - template: templates/serviceaccount.yaml
+        equal:
+          path: metadata.annotations
+          value:
+            eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/observer-agent
+            iam.gke.io/gcp-service-account: observer-agent@project.iam.gserviceaccount.com
+            azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.serviceAccountName
+          value: observer-agent
+
+  - it: passes pod labels through (Azure workload identity)
+    set:
+      podLabels:
+        azure.workload.identity/use: "true"
+    asserts:
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.metadata.labels["azure.workload.identity/use"]
+          value: "true"
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: observer-agent
+            app.kubernetes.io/instance: observer-agent
+
+  - it: uses a named ServiceAccount without creating one
+    set:
+      serviceAccount.create: false
+      serviceAccount.name: shared
+    asserts:
+      - template: templates/serviceaccount.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.serviceAccountName
+          value: shared
+
+  - it: passes envFrom through for probe secrets
+    set:
+      envFrom:
+        - secretRef: { name: observer-probe-secrets }
+    asserts:
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef: { name: observer-probe-secrets }

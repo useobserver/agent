@@ -5,6 +5,7 @@ import { PrometheusConfigSchema, type PrometheusConfig } from "@observer/probe-c
 import { validateWithSchema } from "./_validate.ts";
 import { buildPrometheusHeaders, prometheusQueryUrl } from "./prometheus-auth.ts";
 import { classifyFetchError } from "./net-errors.ts";
+import { parsePromInstantResult } from "./_prom-result.ts";
 
 function classifyHttpStatus(status: number): string {
   if (status === 401 || status === 403) return "Unauthorized";
@@ -60,35 +61,19 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
     if (!res.ok) {
       return { value: null, timestamp: ts(), status_hint: "no_data", reason: classifyHttpStatus(res.status), metadata: { status: res.status } };
     }
-    const data = (await res.json()) as { data?: { result?: Array<{ value?: [string, string] }> } };
-    const result = data?.data?.result;
-    if (!Array.isArray(result) || result.length === 0 || !result[0].value) {
-      return { value: null, timestamp: ts(), status_hint: "no_data", reason: "no_data_for_query" };
-    }
-    // An instant query returning more than one series is ambiguous —
-    // picking result[0] silently renders an arbitrary series as truth.
-    // Mirror the loki source: typed no_data reason instead.
-    if (result.length > 1) {
+    // Vector results only (scalar: false), as this source always has: empty
+    // or non-finite → no_data_for_query, several series → prom_multiple_series.
+    const parsed = parsePromInstantResult(await res.json(), "prom", { scalar: false });
+    if (!parsed.ok) {
       return {
         value: null,
         timestamp: ts(),
         status_hint: "no_data",
-        reason: "prom_multiple_series",
-        metadata: { series: result.length },
+        reason: parsed.reason,
+        ...(parsed.metadata ? { metadata: parsed.metadata } : {}),
       };
     }
-    const [tstamp, value] = result[0].value;
-    const num = parseFloat(value);
-    if (!Number.isFinite(num)) {
-      return { value: null, timestamp: ts(), status_hint: "no_data", reason: "no_data_for_query" };
-    }
-    // Guard the sample timestamp: a malformed one must not produce an
-    // Invalid Date ISO string downstream. Fall back to now.
-    const tsNum = parseFloat(tstamp);
-    return {
-      value: num,
-      timestamp: Number.isFinite(tsNum) ? new Date(tsNum * 1000).toISOString() : ts(),
-    };
+    return { value: parsed.value, timestamp: parsed.timestamp };
   } catch (error) {
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: await classifyThrown(error, queryUrl) };
   } finally {

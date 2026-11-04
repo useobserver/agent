@@ -1,0 +1,44 @@
+{{- $fullname := include "observer-agent.fullname" . -}}
+{{- if .Values.heartbeatRelay.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-relay" $fullname | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "observer-agent.labels" . | nindent 4 }}
+  {{- with .Values.heartbeatRelay.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.heartbeatRelay.service.type }}
+  selector:
+    {{- include "observer-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: heartbeat-relay
+      port: {{ .Values.heartbeatRelay.port }}
+      targetPort: heartbeat-relay
+      protocol: TCP
+{{- end }}
+{{- if .Values.otlp.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-otlp" $fullname | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "observer-agent.labels" . | nindent 4 }}
+  {{- with .Values.otlp.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.otlp.service.type }}
+  selector:
+    {{- include "observer-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: otlp-http
+      port: {{ .Values.otlp.port }}
+      targetPort: otlp-http
+      protocol: TCP
+{{- end }}

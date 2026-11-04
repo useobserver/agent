@@ -1,0 +1,13 @@
+{
+  "id": "observer-agent",
+  "name": "Observer Agent",
+  "version": "1",
+  "description": "The Observer Agent runs HTTP, TCP, DNS, TLS, database and Prometheus checks from your own server and reports them to Observer for status pages, SLOs and alerts. Paste your agent key into AGENT_KEY.",
+  "logo": "observer-agent.svg",
+  "links": {
+    "github": "https://github.com/useobserver/agent",
+    "website": "https://use.observer",
+    "docs": "https://docs.use.observer"
+  },
+  "tags": ["monitoring", "observability"]
+}

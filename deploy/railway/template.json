@@ -1,0 +1,21 @@
+{
+  "$comment": "Source of truth for the Railway template, which is created by hand in the Railway template composer (checklist: README.md next to this file). The deploy-targets compat test parses it.",
+  "name": "Observer Agent",
+  "description": "Run the Observer Agent on your own Railway account. It runs your checks and reports to Observer for your status pages and alerts.",
+  "category": "Observability",
+  "icon": "https://use.observer/logo-transparent.svg",
+  "services": [
+    {
+      "name": "observer-agent",
+      "source": { "image": "ghcr.io/useobserver/agent:1" },
+      "replicas": 1,
+      "publicNetworking": false,
+      "volumes": [{ "mountPath": "/data" }],
+      "variables": {
+        "AGENT_KEY": { "required": true, "description": "From Observer: Agents → Add agent" },
+        "CLOUD_SERVER_URL": { "value": "https://use.observer", "description": "Observer Cloud address. Leave as is." },
+        "BUFFER_PATH": { "value": "/data/observer-agent-buffer.db", "description": "Offline queue file on the volume. Leave as is." }
+      }
+    }
+  ]
+}

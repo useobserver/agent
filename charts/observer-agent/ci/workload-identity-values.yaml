@@ -1,0 +1,11 @@
+existingSecret:
+  name: observer-agent
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/observer-agent
+    azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+podLabels:
+  azure.workload.identity/use: "true"
+envFrom:
+  - secretRef:
+      name: observer-probe-secrets

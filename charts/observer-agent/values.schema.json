@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "observer-agent values",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "key": { "type": "string", "minLength": 1 }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "probeTimings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 },
+        "successThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "stringMap": { "type": "object", "additionalProperties": { "type": "string" } }
+  },
+  "properties": {
+    "global": { "type": "object" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": { "type": "array" },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "agentKey": { "type": "string" },
+    "existingSecret": { "$ref": "#/$defs/secretRef" },
+    "cloudUrl": { "type": "string", "pattern": "^https?://" },
+    "prometheus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string" },
+        "basicAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "username": { "type": "string" },
+            "passwordSecret": { "$ref": "#/$defs/secretRef" }
+          }
+        },
+        "bearerTokenSecret": { "$ref": "#/$defs/secretRef" },
+        "tenantId": { "type": "string" },
+        "headersSecret": { "$ref": "#/$defs/secretRef" }
+      },
+      "if": {
+        "required": ["basicAuth"],
+        "properties": { "basicAuth": { "required": ["enabled"], "properties": { "enabled": { "const": true } } } }
+      },
+      "then": {
+        "properties": {
+          "bearerTokenSecret": {
+            "properties": {
+              "name": { "maxLength": 0, "description": "prometheus.basicAuth.enabled and prometheus.bearerTokenSecret.name cannot both be set" }
+            }
+          }
+        }
+      }
+    },
+    "envFrom": { "type": "array" },
+    "extraEnv": { "type": "array" },
+    "extraVolumes": { "type": "array" },
+    "extraVolumeMounts": { "type": "array" },
+    "caBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "configMap": { "type": "string" },
+        "key": { "type": "string", "minLength": 1 }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "https": { "type": "string" },
+        "http": { "type": "string" },
+        "noProxy": { "type": "string" }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "size": {
+          "type": "string",
+          "pattern": "^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$",
+          "description": "A Kubernetes quantity, such as 1Gi or 500Mi"
+        },
+        "storageClass": { "type": "string" },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["ReadWriteOnce", "ReadWriteOncePod", "ReadWriteMany", "ReadOnlyMany"] }
+        },
+        "existingClaim": { "type": "string" }
+      }
+    },
+    "bufferMaxRows": {
+      "anyOf": [
+        { "type": "string", "pattern": "^([1-9][0-9]*)?$" },
+        { "type": "integer", "minimum": 1 }
+      ]
+    },
+    "heartbeatRelay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "$ref": "#/$defs/port" },
+        "service": { "$ref": "#/$defs/service" }
+      }
+    },
+    "otlp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "$ref": "#/$defs/port" },
+        "tokenSecret": { "$ref": "#/$defs/secretRef" },
+        "service": { "$ref": "#/$defs/service" }
+      },
+      "if": { "required": ["enabled"], "properties": { "enabled": { "const": true } } },
+      "then": {
+        "required": ["tokenSecret"],
+        "properties": {
+          "tokenSecret": {
+            "required": ["name"],
+            "properties": {
+              "name": { "minLength": 1, "description": "otlp.enabled needs otlp.tokenSecret.name" }
+            }
+          }
+        }
+      }
+    },
+    "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARN", "ERROR", "debug", "info", "warn", "error"] },
+    "verbose": { "type": "boolean" },
+    "broadcastLogs": { "type": "boolean" },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "$ref": "#/$defs/stringMap" },
+        "automountToken": { "type": "boolean" }
+      }
+    },
+    "podLabels": { "$ref": "#/$defs/stringMap" },
+    "podAnnotations": { "$ref": "#/$defs/stringMap" },
+    "commonLabels": { "$ref": "#/$defs/stringMap" },
+    "resources": { "type": "object" },
+    "podSecurityContext": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "livenessProbe": { "$ref": "#/$defs/probeTimings" },
+    "readinessProbe": { "$ref": "#/$defs/probeTimings" },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+    "priorityClassName": { "type": "string" },
+    "nodeSelector": { "$ref": "#/$defs/stringMap" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "topologySpreadConstraints": { "type": "array" },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "extraEgress": { "type": "array" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "Set exactly one of agentKey or existingSecret.name",
+      "oneOf": [
+        {
+          "required": ["agentKey"],
+          "properties": {
+            "agentKey": { "minLength": 1 },
+            "existingSecret": { "properties": { "name": { "maxLength": 0 } } }
+          }
+        },
+        {
+          "required": ["existingSecret"],
+          "properties": {
+            "agentKey": { "maxLength": 0 },
+            "existingSecret": { "required": ["name"], "properties": { "name": { "minLength": 1 } } }
+          }
+        }
+      ]
+    }
+  ]
+}

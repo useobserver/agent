@@ -636,6 +636,107 @@ export const EsConfigSchema = z
   });
 export type EsConfig = z.infer<typeof EsConfigSchema>;
 
+// runtime: placeholder until agent 1.8.0 ships the readers.
+//
+// Cloud metric sources. Each reads one value per tick from a metrics backend
+// the customer already runs, with plain HTTPS from the agent. Secrets are
+// env-var references resolved on the agent host (like Loki / Elasticsearch);
+// GCP and Azure can also use the host's ambient cloud identity.
+const cloudTimeoutMs = z.number().int().min(1_000).max(30_000).default(10_000);
+
+// Datadog: POST /api/v2/query/scalar on the account's site. The application
+// key needs the timeseries_query permission.
+export const DATADOG_SITES = [
+  "datadoghq.com",
+  "us3.datadoghq.com",
+  "us5.datadoghq.com",
+  "datadoghq.eu",
+  "ap1.datadoghq.com",
+  "ap2.datadoghq.com",
+  "uk1.datadoghq.com",
+  "ddog-gov.com",
+  "us2.ddog-gov.com",
+] as const;
+export const DATADOG_AGGREGATORS = ["avg", "min", "max", "sum", "last"] as const;
+export const DATADOG_WINDOW_SECONDS = [60, 300, 900, 3600] as const;
+export const DatadogConfigSchema = z
+  .object({
+    site: z.enum(DATADOG_SITES).default("datadoghq.com"),
+    query: z.string().min(1).max(2000),
+    aggregator: z.enum(DATADOG_AGGREGATORS).default("avg"),
+    window_seconds: z.literal(DATADOG_WINDOW_SECONDS).default(300),
+    api_key_ref: envVarRef.default("DD_API_KEY"),
+    app_key_ref: envVarRef.default("DD_APP_KEY"),
+    timeout_ms: cloudTimeoutMs,
+  })
+  .strict();
+export type DatadogConfig = z.infer<typeof DatadogConfigSchema>;
+
+// Google Cloud Monitoring: PromQL through the Prometheus-compatible query
+// API. `metadata` takes a token from the GCE / GKE / Cloud Run metadata
+// server; `service_account_key` reads a key (JSON, or a path to it) from the
+// env var named by credentials_ref.
+export const GCP_AUTH_MODES = ["metadata", "service_account_key"] as const;
+export const GcpMonitoringConfigSchema = z
+  .object({
+    project_id: z
+      .string()
+      .regex(
+        /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/,
+        "project_id must be a Google Cloud project ID (6-30 lowercase letters, digits and dashes)",
+      ),
+    query: z.string().min(1).max(4000),
+    auth_mode: z.enum(GCP_AUTH_MODES).default("metadata"),
+    credentials_ref: envVarRef.optional(),
+    timeout_ms: cloudTimeoutMs,
+  })
+  .strict()
+  .refine((v) => v.auth_mode !== "service_account_key" || Boolean(v.credentials_ref), {
+    message: "service_account_key auth requires credentials_ref",
+    path: ["credentials_ref"],
+  });
+export type GcpMonitoringConfig = z.infer<typeof GcpMonitoringConfigSchema>;
+
+// Azure Monitor: ARM metrics for one resource. `client_secret` is a service
+// principal (tenant_id + client_id + client_secret_ref); managed and workload
+// identity use the host's identity (client_id picks a user-assigned one).
+export const AZURE_AGGREGATIONS = ["Average", "Minimum", "Maximum", "Total", "Count"] as const;
+export const AZURE_INTERVALS = ["PT1M", "PT5M", "PT15M", "PT30M", "PT1H"] as const;
+export const AZURE_AUTH_MODES = ["client_secret", "managed_identity", "workload_identity"] as const;
+export const AZURE_CLOUDS = ["public", "usgov", "china"] as const;
+export const AzureMonitorConfigSchema = z
+  .object({
+    resource_id: z
+      .string()
+      .max(1024)
+      .regex(
+        /^\/subscriptions\/[0-9a-fA-F-]{36}\/resourceGroups\/[^/]+\/providers\/[^/]+\/.+$/,
+        "resource_id must be a full Azure resource ID (/subscriptions/<id>/resourceGroups/<group>/providers/<namespace>/...)",
+      ),
+    metric_name: z.string().min(1).max(255),
+    metric_namespace: z.string().min(1).max(255).optional(),
+    aggregation: z.enum(AZURE_AGGREGATIONS).default("Average"),
+    interval: z.enum(AZURE_INTERVALS).default("PT1M"),
+    filter: z.string().max(1000).optional(),
+    auth_mode: z.enum(AZURE_AUTH_MODES).default("client_secret"),
+    tenant_id: z.guid().optional(),
+    client_id: z.guid().optional(),
+    client_secret_ref: envVarRef.optional(),
+    cloud: z.enum(AZURE_CLOUDS).default("public"),
+    timeout_ms: cloudTimeoutMs,
+  })
+  .strict()
+  .refine(
+    (v) =>
+      v.auth_mode !== "client_secret" ||
+      (Boolean(v.tenant_id) && Boolean(v.client_id) && Boolean(v.client_secret_ref)),
+    {
+      message: "client_secret auth requires tenant_id, client_id and client_secret_ref",
+      path: ["client_secret_ref"],
+    },
+  );
+export type AzureMonitorConfig = z.infer<typeof AzureMonitorConfigSchema>;
+
 // z.infer<>'d types — public so callers can replace `Record<string, unknown>`
 // with the right shape per probe.
 export type PrometheusConfig = z.infer<typeof PrometheusConfigSchema>;

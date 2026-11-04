@@ -1,0 +1,124 @@
+suite: heartbeat relay and OTLP
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/networkpolicy.yaml
+release:
+  name: observer-agent
+set:
+  existingSecret.name: observer-agent
+tests:
+  - it: sets no relay or OTLP env and no Service by default
+    asserts:
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: HEARTBEAT_RELAY_ENABLED
+      - template: templates/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: OBSERVER_OTLP_LISTEN_ADDR
+      - template: templates/deployment.yaml
+        notExists:
+          path: spec.template.spec.containers[0].ports
+
+  - it: enables the relay on 0.0.0.0 with a Service
+    set:
+      heartbeatRelay.enabled: true
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: HEARTBEAT_RELAY_ENABLED, value: "true" }
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: HEARTBEAT_RELAY_HOST, value: 0.0.0.0 }
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: HEARTBEAT_RELAY_PORT, value: "10102" }
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/service.yaml
+        equal:
+          path: metadata.name
+          value: observer-agent-relay
+      - template: templates/service.yaml
+        equal:
+          path: spec.ports[0].port
+          value: 10102
+
+  - it: enables OTLP on 0.0.0.0 with the token from its Secret and a Service
+    set:
+      otlp.enabled: true
+      otlp.tokenSecret.name: otlp-token
+      otlp.service.type: LoadBalancer
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: OBSERVER_OTLP_LISTEN_ADDR, value: "0.0.0.0:4318" }
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBSERVER_OTLP_BEARER_TOKEN
+            valueFrom: { secretKeyRef: { name: otlp-token, key: token } }
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/service.yaml
+        equal:
+          path: metadata.name
+          value: observer-agent-otlp
+      - template: templates/service.yaml
+        equal:
+          path: spec.type
+          value: LoadBalancer
+
+  - it: renders both Services when both are enabled
+    set:
+      heartbeatRelay.enabled: true
+      otlp.enabled: true
+      otlp.tokenSecret.name: otlp-token
+    asserts:
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 2
+
+  - it: opens ingress only for enabled ports in the NetworkPolicy
+    set:
+      networkPolicy.enabled: true
+      otlp.enabled: true
+      otlp.tokenSecret.name: otlp-token
+    asserts:
+      - template: templates/networkpolicy.yaml
+        equal:
+          path: spec.ingress
+          value:
+            - ports:
+                - { port: 4318, protocol: TCP }
+
+  - it: denies all ingress when nothing listens
+    set:
+      networkPolicy.enabled: true
+    asserts:
+      - template: templates/networkpolicy.yaml
+        equal:
+          path: spec.ingress
+          value: []
+      - template: templates/networkpolicy.yaml
+        contains:
+          path: spec.egress
+          content:
+            ports:
+              - { port: 443, protocol: TCP }

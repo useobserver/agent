@@ -1,0 +1,54 @@
+suite: proxy and CA bundle
+templates:
+  - templates/deployment.yaml
+release:
+  name: observer-agent
+set:
+  existingSecret.name: observer-agent
+tests:
+  - it: mounts the CA ConfigMap and points NODE_EXTRA_CA_CERTS at it
+    set:
+      caBundle.configMap: corp-ca
+      caBundle.key: bundle.pem
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: NODE_EXTRA_CA_CERTS, value: /etc/observer-agent/ca/bundle.pem }
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: { name: ca-bundle, mountPath: /etc/observer-agent/ca, readOnly: true }
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-bundle
+            configMap:
+              name: corp-ca
+              items:
+                - { key: bundle.pem, path: bundle.pem }
+
+  - it: sets no CA env or mount by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content: { name: NODE_EXTRA_CA_CERTS }
+      - notContains:
+          path: spec.template.spec.volumes
+          any: true
+          content: { name: ca-bundle }
+
+  - it: sets the proxy variables
+    set:
+      proxy.https: http://proxy:3128
+      proxy.http: http://proxy:3128
+      proxy.noProxy: internal.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: HTTPS_PROXY, value: "http://proxy:3128" }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: HTTP_PROXY, value: "http://proxy:3128" }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: NO_PROXY, value: internal.example.com }

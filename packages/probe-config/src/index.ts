@@ -43,6 +43,17 @@ export {
   LokiConfigSchema,
   EsConfigSchema,
   HostConfigSchema,
+  DatadogConfigSchema,
+  DATADOG_SITES,
+  DATADOG_AGGREGATORS,
+  DATADOG_WINDOW_SECONDS,
+  GcpMonitoringConfigSchema,
+  GCP_AUTH_MODES,
+  AzureMonitorConfigSchema,
+  AZURE_AGGREGATIONS,
+  AZURE_INTERVALS,
+  AZURE_AUTH_MODES,
+  AZURE_CLOUDS,
   HEADER_NAME_MAX_LENGTH,
   HEADER_REFS_MAX_ENTRIES,
   isValidHeaderName,
@@ -75,6 +86,9 @@ export type {
   LokiConfig,
   EsConfig,
   HostConfig,
+  DatadogConfig,
+  GcpMonitoringConfig,
+  AzureMonitorConfig,
 } from "./schemas";
 
 export {

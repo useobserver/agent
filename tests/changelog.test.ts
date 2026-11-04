@@ -9,8 +9,13 @@ const root = join(import.meta.dir, "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version as string;
 const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
 
+// Between releases package.json carries the next version as a prerelease
+// (e.g. 1.8.0-dev). Nothing publishes a prerelease, so its notes live under
+// "## Unreleased" until the release commit renames that section.
+const isPrerelease = version.includes("-");
+
 describe("CHANGELOG.md", () => {
-  it(`has a non-empty section for the current version (${version})`, () => {
+  it.skipIf(isPrerelease)(`has a non-empty section for the current version (${version})`, () => {
     const re = new RegExp(`^## ${version.replace(/\./g, "\\.")}(?: |$)[^\\n]*\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m");
     const m = re.exec(changelog);
     expect(m, `add a "## ${version} (YYYY-MM-DD)" section`).not.toBeNull();

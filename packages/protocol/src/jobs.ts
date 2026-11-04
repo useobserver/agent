@@ -53,6 +53,10 @@ export const PROBE_TEST_SOURCE_TYPES = [
   "loki",
   "elasticsearch",
   "host",
+  // Agent 1.8.0+; older agents answer unsupported_source_type.
+  "datadog",
+  "gcp_monitoring",
+  "azure_monitor",
 ] as const;
 export type ProbeTestSourceType = (typeof PROBE_TEST_SOURCE_TYPES)[number];
 

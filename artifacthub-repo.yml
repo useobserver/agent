@@ -1,0 +1,8 @@
+# Artifact Hub repository metadata for oci://ghcr.io/useobserver/charts/observer-agent.
+# The public chart workflow (.github/workflows/chart.yml) pushes it to the
+# `artifacthub.io` tag of the chart's OCI repository with oras.
+# Format: https://github.com/artifacthub/hub/blob/master/docs/metadata/artifacthub-repo.yml
+
+# Shown on the repository card in the Artifact Hub control panel once the
+# repository is registered. Fill it in to get the verified publisher badge.
+repositoryID: REPLACE_WITH_ARTIFACT_HUB_REPOSITORY_ID

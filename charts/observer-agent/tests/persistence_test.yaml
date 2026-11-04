@@ -1,0 +1,75 @@
+suite: persistence
+templates:
+  - templates/pvc.yaml
+  - templates/deployment.yaml
+release:
+  name: observer-agent
+set:
+  existingSecret.name: observer-agent
+tests:
+  - it: creates a PVC by default and mounts it at /data
+    asserts:
+      - template: templates/pvc.yaml
+        isKind:
+          of: PersistentVolumeClaim
+      - template: templates/pvc.yaml
+        equal:
+          path: spec.resources.requests.storage
+          value: 1Gi
+      - template: templates/pvc.yaml
+        equal:
+          path: spec.accessModes
+          value: [ReadWriteOnce]
+      - template: templates/pvc.yaml
+        notExists:
+          path: spec.storageClassName
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: observer-agent
+
+  - it: passes size and storage class through
+    set:
+      persistence.size: 5Gi
+      persistence.storageClass: fast
+    asserts:
+      - template: templates/pvc.yaml
+        equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+      - template: templates/pvc.yaml
+        equal:
+          path: spec.storageClassName
+          value: fast
+
+  - it: uses an existing claim instead of creating one
+    set:
+      persistence.existingClaim: my-claim
+    asserts:
+      - template: templates/pvc.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: my-claim
+
+  - it: falls back to emptyDir when persistence is off
+    set:
+      persistence.enabled: false
+    asserts:
+      - template: templates/pvc.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}

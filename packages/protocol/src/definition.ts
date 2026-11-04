@@ -21,6 +21,9 @@ export const AGENT_SOURCE_TYPES = Object.freeze([
   "loki",
   "elasticsearch",
   "host",
+  "datadog",
+  "gcp_monitoring",
+  "azure_monitor",
 ] as const);
 
 export type SourceType = (typeof AGENT_SOURCE_TYPES)[number];

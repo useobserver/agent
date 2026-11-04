@@ -144,11 +144,14 @@ describe("Source lifecycle", () => {
   it("SOURCE_CLASSES has one entry per registered type (legacy pull + push)", () => {
     const keys = Object.keys(SOURCE_CLASSES).sort();
     expect(keys).toEqual([
+      "azure_monitor",
       "cloudwatch",
       "custom",
       "database",
+      "datadog",
       "dns",
       "elasticsearch",
+      "gcp_monitoring",
       "grpc",
       "host",
       "http",

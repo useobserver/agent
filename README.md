@@ -86,6 +86,60 @@ be explicit. `latest` moves only on release tags. Track releases on the
 repository's Releases page; each release ships standalone binaries with
 a `SHA256SUMS.txt` checksum file (named `SHA256SUMS` before 1.6.0).
 
+### Kubernetes (Helm)
+
+The [`observer-agent` chart](./charts/observer-agent) is published to
+`oci://ghcr.io/useobserver/charts/observer-agent`. Put the agent key in a
+Secret, then install the chart:
+
+```bash
+kubectl create namespace observability
+kubectl create secret generic observer-agent -n observability \
+  --from-literal=AGENT_KEY='obs_live_...'
+helm install observer-agent oci://ghcr.io/useobserver/charts/observer-agent \
+  -n observability --set existingSecret.name=observer-agent
+```
+
+The chart runs one replica (one agent key = one release), keeps the local
+queue on a 1Gi PersistentVolumeClaim at `/data`, runs as non-root with a
+read-only root filesystem, and checks the agent with the image's own Bun
+against `/healthz`. The debug dashboard stays on loopback inside the pod;
+the chart's install notes show how to open it from your machine.
+
+- Probe secrets (`connection_string_ref`, `token_ref`, `header_refs`, ...):
+  put them in a Secret and pass it with `envFrom`.
+- CloudWatch on EKS: annotate the ServiceAccount with
+  `eks.amazonaws.com/role-arn` (`serviceAccount.annotations`); the AWS SDK
+  picks up the role.
+- Heartbeat relay and OTLP receiver: `heartbeatRelay.enabled=true`,
+  `otlp.enabled=true` (needs `otlp.tokenSecret.name`). Each adds a Service.
+- Private CA: `caBundle.configMap`. Proxy: `proxy.https`, `proxy.noProxy`.
+
+Every value is listed in the [chart README](./charts/observer-agent/README.md).
+
+## Deploy
+
+Run the agent on your own platform account. Every option runs the same
+image (`ghcr.io/useobserver/agent:1`) as a small always-on service with no
+public port. Your platform's pricing applies. Create the agent in Observer
+first (Agents, Add agent) and paste its key when the platform asks for
+`AGENT_KEY`.
+
+| Platform | Deploy | Offline queue |
+|---|---|---|
+| Render | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/useobserver/agent) | persistent disk |
+| DigitalOcean | [![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/useobserver/agent/tree/main) | lost on redeploy (App Platform has no volumes) |
+| Railway | template coming soon | volume |
+| Fly.io | in an empty directory: `fly launch --from https://github.com/useobserver/agent --copy-config --no-deploy`, then `fly secrets set AGENT_KEY=...` and `fly deploy` | volume |
+| Coolify, Dokploy, Portainer | [`docker-compose.yml`](docker-compose.yml) as a Docker Compose service or stack | volume |
+| Linux, macOS | `curl -fsSL https://use.observer/install.sh \| AGENT_KEY=obs_live_... sh` | on disk |
+
+The templates: [`render.yaml`](render.yaml), [`fly.toml`](fly.toml) and
+[`.do/deploy.template.yaml`](.do/deploy.template.yaml) at the repository
+root (where the platforms look), the Railway template spec in
+[`deploy/railway/`](deploy/railway/) and the Dokploy template in
+[`deploy/dokploy/`](deploy/dokploy/).
+
 ## Probe types
 
 Each metric definition carries a `source_type`. The agent dispatches by

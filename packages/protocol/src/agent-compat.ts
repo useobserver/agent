@@ -34,6 +34,9 @@ export const SOURCE_TYPE_MIN_AGENT_VERSION: Readonly<Record<SourceType, string>>
   loki: "1.6.0",
   elasticsearch: "1.6.0",
   host: "1.6.0",
+  datadog: "1.8.0",
+  gcp_monitoring: "1.8.0",
+  azure_monitor: "1.8.0",
 });
 
 /**

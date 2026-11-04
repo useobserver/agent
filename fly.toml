@@ -1,0 +1,26 @@
+# Fly.io config for the Observer Agent, running on your own Fly account.
+# The app name is chosen by `fly launch`. There is no [http_service] or
+# [[services]] section, so nothing is exposed and auto-stop does not apply.
+#
+#   mkdir observer-agent && cd observer-agent   # --from clones into an empty directory
+#   fly launch --from https://github.com/useobserver/agent --copy-config --no-deploy
+#   fly secrets set AGENT_KEY=<your agent key>
+#   fly deploy
+#
+# Reference: https://fly.io/docs/reference/configuration/
+
+[build]
+  image = "ghcr.io/useobserver/agent:1"
+
+[env]
+  CLOUD_SERVER_URL = "https://use.observer"
+  BUFFER_PATH = "/data/observer-agent-buffer.db"
+
+# The offline queue lives on this volume, so it survives a redeploy.
+[mounts]
+  source = "observer_buffer"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

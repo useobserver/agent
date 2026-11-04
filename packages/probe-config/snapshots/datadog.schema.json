@@ -1,0 +1,70 @@
+{
+  "type": "object",
+  "properties": {
+    "site": {
+      "default": "datadoghq.com",
+      "type": "string",
+      "enum": [
+        "datadoghq.com",
+        "us3.datadoghq.com",
+        "us5.datadoghq.com",
+        "datadoghq.eu",
+        "ap1.datadoghq.com",
+        "ap2.datadoghq.com",
+        "uk1.datadoghq.com",
+        "ddog-gov.com",
+        "us2.ddog-gov.com"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "aggregator": {
+      "default": "avg",
+      "type": "string",
+      "enum": [
+        "avg",
+        "min",
+        "max",
+        "sum",
+        "last"
+      ]
+    },
+    "window_seconds": {
+      "default": 300,
+      "type": "number",
+      "enum": [
+        60,
+        300,
+        900,
+        3600
+      ]
+    },
+    "api_key_ref": {
+      "default": "DD_API_KEY",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "app_key_ref": {
+      "default": "DD_APP_KEY",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "timeout_ms": {
+      "default": 10000,
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 30000
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false
+}

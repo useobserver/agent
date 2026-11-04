@@ -1,0 +1,18 @@
+existingSecret:
+  name: observer-agent
+caBundle:
+  configMap: corp-ca
+proxy:
+  https: http://proxy.corp.internal:3128
+  http: http://proxy.corp.internal:3128
+  noProxy: kubernetes.default.svc,.svc.cluster.local
+prometheus:
+  url: http://prometheus.monitoring.svc:9090
+  basicAuth:
+    enabled: true
+    username: observer
+    passwordSecret:
+      name: prometheus-auth
+  tenantId: team-a
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

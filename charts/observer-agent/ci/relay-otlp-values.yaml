@@ -1,0 +1,14 @@
+existingSecret:
+  name: observer-agent
+heartbeatRelay:
+  enabled: true
+otlp:
+  enabled: true
+  tokenSecret:
+    name: observer-agent-otlp
+networkPolicy:
+  enabled: true
+  extraEgress:
+    - ports:
+        - port: 9090
+          protocol: TCP

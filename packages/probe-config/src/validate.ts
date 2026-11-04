@@ -25,6 +25,9 @@ import {
   LokiConfigSchema,
   EsConfigSchema,
   HostConfigSchema,
+  DatadogConfigSchema,
+  GcpMonitoringConfigSchema,
+  AzureMonitorConfigSchema,
 } from "./schemas";
 import { PROBE_TYPES, type ProbeType } from "./probe-types";
 
@@ -48,6 +51,9 @@ const SCHEMAS: Record<ProbeType, ZodTypeAny> = {
   loki: LokiConfigSchema,
   elasticsearch: EsConfigSchema,
   host: HostConfigSchema,
+  datadog: DatadogConfigSchema,
+  gcp_monitoring: GcpMonitoringConfigSchema,
+  azure_monitor: AzureMonitorConfigSchema,
 };
 
 // Returns the Zod schema for a given source_type, or undefined if the

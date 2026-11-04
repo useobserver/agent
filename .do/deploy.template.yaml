@@ -1,0 +1,27 @@
+# DigitalOcean App Platform template for the Observer Agent, running as a
+# worker on your own DigitalOcean account. Published at .do/deploy.template.yaml
+# in the public repo. App Platform has no persistent volumes, so the offline
+# queue lives in /tmp and does not survive a redeploy.
+#
+# Reference: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+spec:
+  name: observer-agent
+  workers:
+    - name: agent
+      image:
+        registry_type: GHCR
+        registry: useobserver
+        repository: agent
+        tag: "1"
+      instance_count: 1
+      instance_size_slug: apps-s-1vcpu-0.5gb
+      envs:
+        - key: AGENT_KEY
+          type: SECRET
+          scope: RUN_TIME
+        - key: CLOUD_SERVER_URL
+          value: https://use.observer
+          scope: RUN_TIME
+        - key: BUFFER_PATH
+          value: /tmp/observer-agent-buffer.db
+          scope: RUN_TIME

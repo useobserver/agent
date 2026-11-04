@@ -1,0 +1,51 @@
+{{ template "chart.header" . }}
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.homepageLine" . }}
+
+## Install
+
+Create the agent in Observer (Agents, Add agent) and copy its key. Then:
+
+```sh
+kubectl create namespace observability
+kubectl create secret generic observer-agent -n observability --from-literal=AGENT_KEY='obs_live_...'
+helm install observer-agent oci://ghcr.io/useobserver/charts/observer-agent \
+  -n observability --set existingSecret.name=observer-agent
+```
+
+One agent key = one release. The chart always runs one replica.
+
+The agent keeps results it could not send yet in a local queue on a
+PersistentVolumeClaim at `/data`. Set `persistence.enabled=false` on clusters
+without a storage class; the queue is then lost when the pod restarts.
+
+## Probe secrets
+
+Checks reference secrets by environment variable name (`connection_string_ref`,
+`token_ref`, `header_refs`, ...). Put them in a Secret and pass it with `envFrom`:
+
+```yaml
+envFrom:
+  - secretRef:
+      name: observer-probe-secrets
+```
+
+## Cloud workload identity
+
+The agent uses the cloud SDK's default credential chain. Annotate the
+ServiceAccount:
+
+| Cloud | Values |
+|-------|--------|
+| EKS (IRSA) | `serviceAccount.annotations."eks\.amazonaws\.com/role-arn"` |
+| GKE | `serviceAccount.annotations."iam\.gke\.io/gcp-service-account"` |
+| AKS | `serviceAccount.annotations."azure\.workload\.identity/client-id"` and `podLabels."azure\.workload\.identity/use"="true"` |
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}

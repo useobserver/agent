@@ -1,0 +1,19 @@
+# Observer Agent for Dokploy (staged for blueprints/observer-agent in
+# github.com/Dokploy/templates). The canonical compose file
+# (docker-compose.yml at the repo root) with Dokploy's rules applied: no
+# container_name, no published ports, env from the Dokploy Environment tab.
+services:
+  observer-agent:
+    image: ghcr.io/useobserver/agent:1
+    restart: unless-stopped
+    environment:
+      # Set AGENT_KEY in the Dokploy Environment tab (Observer: Agents, Add agent).
+      - AGENT_KEY=${AGENT_KEY:?}
+      - CLOUD_SERVER_URL=${CLOUD_SERVER_URL:-https://use.observer}
+      - BUFFER_PATH=/data/observer-agent-buffer.db
+    # The offline queue survives the container being recreated.
+    volumes:
+      - observer-agent-buffer:/data
+
+volumes:
+  observer-agent-buffer: {}

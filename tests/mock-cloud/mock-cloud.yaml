@@ -1,0 +1,44 @@
+# The mock cloud (server.ts) as a pod + Service, for the Helm chart smoke
+# tests (.github/workflows/chart.yml in the public repo). Create the ConfigMap
+# first: kubectl create configmap mock-cloud --from-file=server.ts=tests/mock-cloud/server.ts
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mock-cloud
+  labels:
+    app: mock-cloud
+spec:
+  containers:
+    - name: mock-cloud
+      image: oven/bun:1.3.6-alpine
+      command: ["bun", "/mock/server.ts"]
+      env:
+        - name: PORT
+          value: "8080"
+        - name: MOCK_SELF_URL
+          value: http://mock-cloud.default.svc:8080
+      ports:
+        - containerPort: 8080
+      readinessProbe:
+        httpGet:
+          path: /_assert
+          port: 8080
+        periodSeconds: 2
+      volumeMounts:
+        - name: src
+          mountPath: /mock
+  volumes:
+    - name: src
+      configMap:
+        name: mock-cloud
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-cloud
+spec:
+  selector:
+    app: mock-cloud
+  ports:
+    - port: 8080
+      targetPort: 8080

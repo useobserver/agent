@@ -1,0 +1,3 @@
+agentKey: obs_live_ci_nopersist
+persistence:
+  enabled: false

@@ -1,0 +1,171 @@
+# Observer Agent chart values.
+# The agent always runs as a single replica (one agent key = one running agent),
+# so there is no replicaCount.
+
+image:
+  # -- Agent image repository.
+  repository: ghcr.io/useobserver/agent
+  # -- Image tag. Empty uses the chart's appVersion.
+  tag: ""
+  # -- Image digest (sha256:...). When set it wins over the tag.
+  digest: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+# -- Pull secrets for a private mirror of the image.
+imagePullSecrets: []
+# -- Override the chart name in resource names.
+nameOverride: ""
+# -- Override the full resource name.
+fullnameOverride: ""
+
+# -- The agent key (obs_live_...). The chart stores it in a Secret it creates.
+# Set exactly one of agentKey or existingSecret.name. Avoid this in GitOps repos:
+# use existingSecret instead.
+agentKey: ""
+existingSecret:
+  # -- Name of an existing Secret that holds the agent key.
+  name: ""
+  # -- Key inside that Secret.
+  key: AGENT_KEY
+# -- Observer URL the agent reports to (CLOUD_SERVER_URL).
+cloudUrl: https://use.observer
+
+prometheus:
+  # -- Prometheus base URL for prometheus metrics (PROMETHEUS_SERVER_URL). Empty: no Prometheus.
+  url: ""
+  basicAuth:
+    # -- Use basic auth against Prometheus (PROMETHEUS_BASIC_AUTH_ENABLED).
+    enabled: false
+    # -- Basic auth user name.
+    username: ""
+    # -- Secret holding the basic auth password (PROMETHEUS_PASSWORD).
+    passwordSecret: { name: "", key: password }
+  # -- Secret holding a bearer token for Prometheus (PROMETHEUS_BEARER_TOKEN). Not together with basic auth.
+  bearerTokenSecret: { name: "", key: token }
+  # -- Tenant id sent as X-Scope-OrgID, for Mimir, Cortex or Thanos (PROMETHEUS_TENANT_ID).
+  tenantId: ""
+  # -- Secret holding extra request headers as JSON (PROMETHEUS_HEADERS).
+  headersSecret: { name: "", key: headers }
+
+# -- Extra env sources, for probe secrets referenced by *_ref fields
+# (connection_string_ref, token_ref, header_refs, ...).
+# Example: [{ secretRef: { name: observer-probe-secrets } }]
+envFrom: []
+# -- Extra environment variables (EnvVar list; valueFrom allowed).
+extraEnv: []
+# -- Extra volumes, for example a Secret with PEM files for *_cert_ref fields.
+extraVolumes: []
+# -- Extra volume mounts for the agent container.
+extraVolumeMounts: []
+caBundle:
+  # -- ConfigMap with a private CA bundle. Mounted read-only; sets NODE_EXTRA_CA_CERTS.
+  configMap: ""
+  # -- Key in the ConfigMap that holds the PEM bundle.
+  key: ca.crt
+proxy:
+  # -- HTTPS_PROXY for outbound calls.
+  https: ""
+  # -- HTTP_PROXY for outbound calls.
+  http: ""
+  # -- NO_PROXY. List hostnames: cluster CIDRs are not supported by NO_PROXY.
+  noProxy: ""
+
+persistence:
+  # -- Keep the local queue on a PersistentVolumeClaim at /data. false: emptyDir (queued results are lost on restart).
+  enabled: true
+  # -- Size of the claim.
+  size: 1Gi
+  # -- Storage class. Empty: the cluster default.
+  storageClass: ""
+  # -- Access modes of the claim.
+  accessModes: [ReadWriteOnce]
+  # -- Use an existing claim instead of creating one.
+  existingClaim: ""
+# -- Maximum rows in the local queue (BUFFER_MAX_ROWS). Empty: the agent default.
+bufferMaxRows: ""
+
+heartbeatRelay:
+  # -- Accept heartbeat pings from jobs in the cluster and relay them (HEARTBEAT_RELAY_ENABLED). Binds 0.0.0.0 in the pod and adds a Service.
+  enabled: false
+  # -- Relay port.
+  port: 10102
+  service:
+    # -- Service type for the relay.
+    type: ClusterIP
+    # -- Service annotations for the relay.
+    annotations: {}
+otlp:
+  # -- Accept OpenTelemetry metrics over OTLP/HTTP from other pods. Binds 0.0.0.0:<port> and adds a Service. Requires tokenSecret.
+  enabled: false
+  # -- OTLP/HTTP port.
+  port: 4318
+  # -- Secret holding the bearer token senders must present (OBSERVER_OTLP_BEARER_TOKEN).
+  tokenSecret: { name: "", key: token }
+  service:
+    # -- Service type for the OTLP receiver.
+    type: ClusterIP
+    # -- Service annotations for the OTLP receiver.
+    annotations: {}
+
+# -- Lowest log level sent to Observer when broadcastLogs is on (LOG_BROADCAST_LEVEL).
+logLevel: WARN
+# -- Verbose logs (VERBOSE).
+verbose: false
+# -- Send agent logs to Observer (BROADCAST_LOGS).
+broadcastLogs: false
+
+serviceAccount:
+  # -- Create a ServiceAccount.
+  create: true
+  # -- ServiceAccount name. Empty: the full name when created, else "default".
+  name: ""
+  # -- ServiceAccount annotations. Workload identity: EKS (IRSA) eks.amazonaws.com/role-arn,
+  # GKE iam.gke.io/gcp-service-account, Azure azure.workload.identity/client-id.
+  annotations: {}
+  # -- Mount the Kubernetes API token. The agent does not call the Kubernetes API.
+  automountToken: false
+# -- Extra pod labels. Azure workload identity needs azure.workload.identity/use: "true".
+podLabels: {}
+# -- Extra pod annotations.
+podAnnotations: {}
+# -- Labels added to every resource.
+commonLabels: {}
+
+# -- Container resources.
+resources:
+  requests: { cpu: 50m, memory: 96Mi }
+  limits: { memory: 256Mi }
+# -- Pod security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile: { type: RuntimeDefault }
+# -- Container security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+# -- Liveness probe timings. The probe runs the image's own Bun against /healthz.
+livenessProbe: { initialDelaySeconds: 15, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3 }
+# -- Readiness probe timings.
+readinessProbe: { initialDelaySeconds: 5, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 3 }
+# -- Seconds the agent gets to flush and stop.
+terminationGracePeriodSeconds: 15
+# -- Pod priority class.
+priorityClassName: ""
+# -- Node selector.
+nodeSelector: {}
+# -- Tolerations.
+tolerations: []
+# -- Affinity.
+affinity: {}
+# -- Topology spread constraints.
+topologySpreadConstraints: []
+
+networkPolicy:
+  # -- Create a NetworkPolicy. Egress: DNS, TCP 443 anywhere, plus extraEgress. Ingress: only the relay and OTLP ports, when enabled.
+  enabled: false
+  # -- Extra egress rules (NetworkPolicyEgressRule list), for example Prometheus or a database on another port.
+  extraEgress: []

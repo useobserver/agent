@@ -1,0 +1,28 @@
+# Render Blueprint for the Observer Agent. The agent runs as a background
+# worker on your own Render account: no public port, one instance, with its
+# offline queue on a persistent disk. Render asks for AGENT_KEY when you
+# deploy (Observer: Agents, Add agent).
+#
+# Deploy: https://render.com/deploy?repo=https://github.com/useobserver/agent
+# Reference: https://render.com/docs/blueprint-spec
+services:
+  - type: worker
+    name: observer-agent
+    runtime: image
+    image:
+      url: ghcr.io/useobserver/agent:1
+    # Always explicit: a disk needs a paid plan. Your platform's pricing applies.
+    plan: starter
+    # One process per agent key (the queue is a single-writer SQLite file).
+    numInstances: 1
+    disk:
+      name: observer-buffer
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: AGENT_KEY
+        sync: false
+      - key: CLOUD_SERVER_URL
+        value: https://use.observer
+      - key: BUFFER_PATH
+        value: /data/observer-agent-buffer.db

@@ -1,0 +1,9 @@
+variables = {}
+
+[config]
+domains = []
+mounts = []
+
+[config.env]
+AGENT_KEY = ""
+CLOUD_SERVER_URL = "https://use.observer"

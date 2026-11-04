@@ -5,6 +5,15 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+- New Helm chart in `charts/observer-agent`, published to
+  `oci://ghcr.io/useobserver/charts/observer-agent`: one replica with its queue on a
+  PersistentVolumeClaim, a read-only root filesystem, workload identity through
+  ServiceAccount annotations, and optional Services for the heartbeat relay and OTLP receiver.
+- Prerelease tags (`agent-vX.Y.Z-rc.N`) no longer move the `1`, `1.x` and `latest` image tags.
+- Deploy templates for Render (`render.yaml`), Fly.io (`fly.toml`) and DigitalOcean
+  (`.do/deploy.template.yaml`), plus the Railway and Dokploy template sources under
+  `deploy/`. See the Deploy section of the README.
+
 ## 1.7.3 (2026-10-23)
 
 - The local buffer now holds up to 200,000 samples (was 10,000), about 33 hours of cloud

@@ -1,0 +1,2 @@
+# Minimum install: the chart creates the key Secret.
+agentKey: obs_live_ci_default

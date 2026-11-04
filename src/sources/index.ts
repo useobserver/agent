@@ -32,6 +32,9 @@ import custom from "./custom/index.ts";
 import loki from "./loki.ts";
 import elasticsearch from "./elasticsearch.ts";
 import host from "./host.ts";
+import datadog from "./datadog.ts";
+import gcp_monitoring from "./gcp-monitoring.ts";
+import azure_monitor from "./azure-monitor.ts";
 
 // Each entry is the per-source default export typed as
 // `ProbeSource<TConfig>` at the module level, narrowed to
@@ -57,6 +60,9 @@ export const SOURCES: Partial<Record<SourceType, ProbeSource<any>>> = {
   loki,
   elasticsearch,
   host,
+  datadog,
+  gcp_monitoring,
+  azure_monitor,
 };
 
 export function getSource(sourceType: string): ProbeSource | undefined {

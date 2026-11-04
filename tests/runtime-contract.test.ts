@@ -16,6 +16,7 @@ const SRC = join(import.meta.dir, "..", "src");
 const AUDITED_DYNAMIC_READS = new Set([
   "sources/_header-refs.ts",
   "sources/_mtls.ts",
+  "sources/_secret-value.ts",
   "sources/database.ts",
   "sources/loki.ts",
   "sources/elasticsearch.ts",
