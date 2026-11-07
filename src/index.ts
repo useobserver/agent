@@ -86,6 +86,24 @@ if (skipSslVerification) {
   );
 }
 
+// Plain http to a non-loopback cloud: anyone on the path can read AGENT_KEY
+// and serve the agent its own metric definitions (which choose what it
+// probes and where). Prober mode refuses http outright; the org agent keeps
+// allowing it for local development, but says so loudly.
+try {
+  const cloud = new URL(CLOUD_SERVER_URL);
+  const host = cloud.hostname.replace(/^\[|\]$/g, "");
+  const loopback = host === "localhost" || host === "::1" || /^127\./.test(host);
+  if (cloud.protocol === "http:" && !loopback) {
+    console.warn(
+      "[WARN] CLOUD_SERVER_URL uses plain http:// to a non-local host. The AGENT_KEY and the metric " +
+        "definitions travel unencrypted and can be read or replaced in transit. Use https://.",
+    );
+  }
+} catch {
+  /* invalid URL: the first cloud call fails and logs it */
+}
+
 if (!PROMETHEUS_SERVER_URL) {
   console.warn(
     "[WARN] PROMETHEUS_SERVER_URL not set — prometheus-type metrics will report no_data; " +

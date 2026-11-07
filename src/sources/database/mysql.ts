@@ -85,8 +85,25 @@ function getPool(dsn: string, statementTimeoutMs: number): mysql.Pool {
   return pool;
 }
 
+// The probe query comes from cloud-side metric config, so a DSN must never
+// enable multi-statement execution ("SELECT 1; DROP TABLE t"). mysql2 lets a
+// `?multipleStatements=true` in the URI override an explicit
+// `multipleStatements: false` option, so the parameter is removed from the
+// URI itself. Exported for tests.
+export function stripMultipleStatements(dsn: string): string {
+  try {
+    const u = new URL(dsn);
+    for (const k of [...u.searchParams.keys()]) {
+      if (k.toLowerCase() === "multiplestatements") u.searchParams.delete(k);
+    }
+    return u.toString();
+  } catch {
+    return dsn; // not a URL: mysql2 cannot parse it either; it fails later as before
+  }
+}
+
 export async function runQuery(
-  dsn: string,
+  dsnRaw: string,
   query: string,
   statementTimeoutMs: number,
 ): Promise<MyQueryResult | MyQueryFailure> {
@@ -98,9 +115,11 @@ export async function runQuery(
   if (!Number.isFinite(statementTimeoutMs) || statementTimeoutMs <= 0) {
     return { ok: false, reason: "db_invalid_timeout", detail: String(statementTimeoutMs) };
   }
+  const dsn = stripMultipleStatements(dsnRaw);
   let connection: mysql.PoolConnection | null = null;
   let raceTimer: ReturnType<typeof setTimeout> | undefined;
   let timedOutAbandoned = false;
+  let inTransaction = false;
   try {
     // Pool acquisition stays INSIDE the try: a malformed DSN makes
     // mysql2 throw synchronously, and that error message can embed the
@@ -122,6 +141,10 @@ export async function runQuery(
     // query promise so its eventual rejection can't go unhandled, and
     // destroy (not release) the connection since it has an in-flight
     // query and can't safely return to the pool.
+    // Read-only transaction: the engine refuses any write or DDL whatever
+    // the DSN user's privileges; ROLLBACK in finally ends it.
+    await connection.query("START TRANSACTION READ ONLY");
+    inTransaction = true;
     const queryPromise = connection.query(query);
     const timedOut = Symbol("timeout");
     const raced = await Promise.race([
@@ -164,6 +187,7 @@ export async function runQuery(
         // protocol-desynced connection to the next probe.
         connection?.destroy();
       } else {
+        if (inTransaction) await connection?.query("ROLLBACK").catch(() => {});
         connection?.release();
       }
     } catch {

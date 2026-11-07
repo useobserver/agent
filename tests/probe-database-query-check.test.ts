@@ -130,3 +130,32 @@ describe("checkSelectOnly — rejects", () => {
     expect(checkSelectOnly(undefined as unknown as string).ok).toBe(false);
   });
 });
+
+describe("checkSelectOnly — audit bypasses (2026-11)", () => {
+  const rejected = [
+    ['quoted function name', `SELECT "nextval"('s')`],
+    ["MySQL executable comment hiding INTO OUTFILE", "SELECT 1 /*! INTO OUTFILE '/tmp/x' */"],
+    ["MySQL -- without space (not a comment there)", "SELECT 1 --1 INTO OUTFILE '/tmp/x'"],
+    ["advisory lock", "SELECT pg_advisory_lock(1)"],
+    ["large object create", "SELECT lo_create(0)"],
+    ["reload conf", "SELECT pg_reload_conf()"],
+    ["MySQL GET_LOCK", "SELECT GET_LOCK('x', 10)"],
+    ["MySQL LOAD_FILE", "SELECT LOAD_FILE('/etc/passwd')"],
+  ] as const;
+  for (const [label, q] of rejected) {
+    it(`rejects ${label}`, () => {
+      expect(checkSelectOnly(q).ok).toBe(false);
+    });
+  }
+
+  const accepted = [
+    ["a -- comment with a space", "SELECT count(*) FROM jobs -- pending rows into dashboard\n"],
+    ["a quoted column", `SELECT "count" FROM stats`],
+    ["a -- inside a string literal", "SELECT '--x' AS s"],
+  ] as const;
+  for (const [label, q] of accepted) {
+    it(`still accepts ${label}`, () => {
+      expect(checkSelectOnly(q).ok).toBe(true);
+    });
+  }
+});

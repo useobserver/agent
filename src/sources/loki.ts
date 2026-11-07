@@ -16,6 +16,7 @@ import type { AgentEnv, ProbeResult, ProbeSource } from "../types.ts";
 import { LokiConfigSchema, type LokiConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
 import { classifyNetError, UNREACHABLE_REASONS as UNREACHABLE } from "./net-errors.ts";
+import { readProbeRef } from "./_ref-policy.ts";
 
 export function validateConfig(config: unknown): null | string {
   return validateWithSchema(LokiConfigSchema, config);
@@ -45,11 +46,11 @@ function buildHeaders(
 
   const mode = config.auth_mode ?? "none";
   if (mode === "bearer") {
-    const token = config.token_ref ? env[config.token_ref] : undefined;
+    const token = readProbeRef(config.token_ref, env);
     if (!token) return { ok: false, reason: "loki_auth_ref_missing", detail: config.token_ref };
     headers.Authorization = `Bearer ${token}`;
   } else if (mode === "basic") {
-    const pass = config.password_ref ? env[config.password_ref] : undefined;
+    const pass = readProbeRef(config.password_ref, env);
     if (!pass) return { ok: false, reason: "loki_auth_ref_missing", detail: config.password_ref };
     headers.Authorization = `Basic ${Buffer.from(`${config.username}:${pass}`).toString("base64")}`;
   }

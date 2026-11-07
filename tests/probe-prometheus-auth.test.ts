@@ -217,3 +217,52 @@ describe("prometheus source against a stub Mimir", () => {
     }
   });
 });
+
+describe("prometheus credentials stay with the operator's server", () => {
+  const ok = { status: "success", data: { resultType: "vector", result: [{ metric: {}, value: [1700000000, "1"] }] } };
+
+  function stub() {
+    const seen: { auth: string | null; tenant: string | null }[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        seen.push({ auth: req.headers.get("authorization"), tenant: req.headers.get("x-scope-orgid") });
+        return Response.json(ok);
+      },
+    });
+    return { server, seen };
+  }
+
+  it("a per-metric prometheus_url on another origin gets no operator credentials", async () => {
+    const operator = stub();
+    const other = stub();
+    try {
+      const r = await execute({ query: "up", prometheus_url: `http://127.0.0.1:${other.server.port}` } as Parameters<typeof execute>[0], {
+        prometheusUrl: `http://127.0.0.1:${operator.server.port}`,
+        prometheusBearerToken: "tok",
+        prometheusTenantId: "team-a",
+      });
+      expect(r.value).toBe(1);
+      expect(other.seen).toEqual([{ auth: null, tenant: null }]);
+      expect(operator.seen).toEqual([]);
+    } finally {
+      operator.server.stop(true);
+      other.server.stop(true);
+    }
+  });
+
+  it("a per-metric prometheus_url on the operator's origin keeps the credentials", async () => {
+    const operator = stub();
+    try {
+      const base = `http://127.0.0.1:${operator.server.port}`;
+      const r = await execute({ query: "up", prometheus_url: `${base}/` } as Parameters<typeof execute>[0], {
+        prometheusUrl: base,
+        prometheusBearerToken: "tok",
+      });
+      expect(r.value).toBe(1);
+      expect(operator.seen[0]?.auth).toBe("Bearer tok");
+    } finally {
+      operator.server.stop(true);
+    }
+  });
+});

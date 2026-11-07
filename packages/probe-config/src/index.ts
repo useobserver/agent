@@ -1,6 +1,7 @@
 // @observer/probe-config — public API.
 
 export { PROBE_TYPES, type ProbeType } from "./probe-types";
+export { RESERVED_AGENT_SECRET_REFS, isReservedAgentSecretRef, configRefNames } from "./reserved-refs";
 
 export {
   PROBE_VALUE_UNITS,

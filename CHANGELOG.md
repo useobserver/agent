@@ -13,6 +13,17 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 - Deploy templates for Render (`render.yaml`), Fly.io (`fly.toml`) and DigitalOcean
   (`.do/deploy.template.yaml`), plus the Railway and Dokploy template sources under
   `deploy/`. See the Deploy section of the README.
+- Secret refs in a metric (`header_refs`, `metadata_refs`, `token_ref`, `connection_string_ref`
+  and the other `*_ref` fields) can no longer name the agent's own credentials, such as
+  `AGENT_KEY`. Such a ref now reports as missing.
+- New optional `OBSERVER_PROBE_SECRET_REFS`: a comma-separated list of the env vars metrics may
+  use as secret refs (a trailing `*` matches a prefix). Unset keeps the current behaviour.
+- Prometheus credentials (`PROMETHEUS_PASSWORD`, `PROMETHEUS_BEARER_TOKEN`, `PROMETHEUS_HEADERS`,
+  tenant id) are sent only to `PROMETHEUS_SERVER_URL`. A metric that sets its own
+  `prometheus_url` on another host is queried without them.
+- The agent warns at startup when `CLOUD_SERVER_URL` is plain `http://` to a non-local host.
+- Database probes run in a read-only transaction and execute a single statement (Postgres and
+  MySQL), and a MySQL connection string can no longer turn on multiple statements.
 
 ## 1.7.3 (2026-10-23)
 

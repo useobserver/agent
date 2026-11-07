@@ -9,6 +9,7 @@
 // `failure` the caller maps to its own reason code.
 
 import { readFileSync } from "node:fs";
+import { readProbeRef } from "./_ref-policy.ts";
 
 export type SecretValueFailure =
   | "missing" // the env var named by the ref is unset or empty
@@ -32,7 +33,7 @@ export function readSecretValue(
   isContent: (raw: string) => boolean,
   readFile: ReadFileText = readUtf8,
 ): SecretValueResult {
-  const raw = env[refName];
+  const raw = readProbeRef(refName, env);
   if (!raw || raw.length === 0) return { ok: false, failure: "missing" };
   if (isContent(raw)) return { ok: true, value: raw, source: "inline" };
   try {

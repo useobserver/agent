@@ -11,14 +11,28 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
 let pgQueryImpl: (sql: string) => Promise<unknown> = async () => [];
 const pgEnds: number[] = [];
+const pgBegins: string[] = [];
+const pgUnsafeOpts: unknown[] = [];
 
 function makeFakePostgres() {
   return function postgresFactory(_dsn: string, _opts?: unknown) {
     const sql = (..._args: unknown[]) => {
       throw new Error("tagged-template path not used in tests");
     };
-    (sql as unknown as { unsafe: (q: string) => Promise<unknown> }).unsafe = async (q: string) => {
+    (sql as unknown as { unsafe: (q: string, a?: unknown, o?: unknown) => Promise<unknown> }).unsafe = async (
+      q: string,
+      _args?: unknown,
+      opts?: unknown,
+    ) => {
+      pgUnsafeOpts.push(opts);
       return pgQueryImpl(q);
+    };
+    (sql as unknown as { begin: (o: string, fn: (tx: unknown) => unknown) => Promise<unknown> }).begin = async (
+      o: string,
+      fn: (tx: unknown) => unknown,
+    ) => {
+      pgBegins.push(o);
+      return await fn(sql);
     };
     (sql as unknown as { end: (opts?: unknown) => Promise<void> }).end = async () => {
       pgEnds.push(Date.now());
@@ -44,7 +58,7 @@ function makeFakeMysql() {
         async getConnection() {
           return {
             async query(sqlStmt: string) {
-              if (/^SET SESSION/i.test(sqlStmt)) {
+              if (/^(SET SESSION|START TRANSACTION|ROLLBACK)/i.test(sqlStmt)) {
                 mySessionStmts.push(sqlStmt);
                 return [[], []];
               }
@@ -330,5 +344,36 @@ describe("execute — mysql", () => {
     const serialized = JSON.stringify(r);
     expect(serialized).not.toContain("obs:pw");
     expect(serialized).not.toContain("mysql://");
+  });
+});
+
+
+describe("database probes run read-only, one statement", () => {
+  it("postgres runs the query inside BEGIN READ ONLY with the extended protocol", async () => {
+    pgBegins.length = 0;
+    pgUnsafeOpts.length = 0;
+    pgQueryImpl = async () => [{ n: 1 }];
+    process.env.PG_DSN_RO_TEST = "postgres://u:p@127.0.0.1:5432/db";
+    const r = await dbSource.execute({ ...baseConfig, connection_string_ref: "PG_DSN_RO_TEST" });
+    expect(r.value).toBe(1);
+    expect(pgBegins).toEqual(["read only"]);
+    expect(pgUnsafeOpts).toEqual([{ simple: false }]);
+  });
+
+  it("mysql opens a READ ONLY transaction and rolls it back", async () => {
+    mySessionStmts.length = 0;
+    myQueryImpl = async () => [[{ n: 1 }], []];
+    process.env.MY_DSN_RO_TEST = "mysql://u:p@127.0.0.1:3306/db";
+    const r = await dbSource.execute({ ...baseConfig, kind: "mysql", connection_string_ref: "MY_DSN_RO_TEST" });
+    expect(r.value).toBe(1);
+    expect(mySessionStmts.some((q) => /^START TRANSACTION READ ONLY$/i.test(q))).toBe(true);
+    expect(mySessionStmts.some((q) => /^ROLLBACK$/i.test(q))).toBe(true);
+  });
+
+  it("strips multipleStatements from a mysql DSN, any case", async () => {
+    const { stripMultipleStatements } = await import("../src/sources/database/mysql.ts");
+    const out = stripMultipleStatements("mysql://u:p@h:3306/db?multipleStatements=true&ssl=x&MULTIPLESTATEMENTS=1");
+    expect(out.toLowerCase()).not.toContain("multiplestatements");
+    expect(out).toContain("ssl=x");
   });
 });

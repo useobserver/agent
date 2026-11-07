@@ -40,7 +40,7 @@ export type { SourceType, MetricDefinition } from "./definition";
 export { AGENT_SOURCE_TYPES, DEFINITIONS_VERSION_HEADER } from "./definition";
 
 export type { AgentEnvScope, AgentEnvVar } from "./agent-runtime";
-export { AGENT_ENV, AGENT_RUNTIME, agentEnvVar } from "./agent-runtime";
+export { AGENT_ENV, AGENT_RUNTIME, agentEnvVar, isAgentInternalSecretEnv } from "./agent-runtime";
 
 export {
   MIN_SUPPORTED_AGENT_VERSION,

@@ -27,6 +27,7 @@
 import type { ProbeResult, ProbeSource } from "../types.ts";
 import { DatabaseConfigSchema, checkDatabaseQuery, type DatabaseConfig } from "@observer/probe-config";
 import { validateWithSchema } from "./_validate.ts";
+import { readProbeRef } from "./_ref-policy.ts";
 import {
   runQuery as runPgQuery,
   resetPgClientCacheForTests,
@@ -84,7 +85,7 @@ export async function execute(config: DatabaseConfig): Promise<ProbeResult> {
     };
   }
 
-  const dsn = process.env[config.connection_string_ref];
+  const dsn = readProbeRef(config.connection_string_ref);
   if (!dsn) {
     return {
       value: null,

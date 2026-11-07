@@ -22,6 +22,15 @@ async function classifyThrown(error: unknown, url: URL): Promise<string> {
   return (await classifyFetchError(error, url, "AgentInternal")).reason;
 }
 
+function sameOrigin(target: URL, operatorUrl: string | undefined): boolean {
+  if (!operatorUrl) return false;
+  try {
+    return new URL(operatorUrl).origin === target.origin;
+  } catch {
+    return false;
+  }
+}
+
 export function validateConfig(config: unknown): null | string {
   return validateWithSchema(PrometheusConfigSchema, config);
 }
@@ -46,11 +55,19 @@ export async function execute(config: PrometheusConfig, env: AgentEnv = {}): Pro
   // Auth + tenant + extra headers. A misconfiguration (bearer AND basic, bad
   // PROMETHEUS_HEADERS) is a typed no_data, never a throw; index.ts logs the
   // explanation once at boot.
-  const built = buildPrometheusHeaders(env);
-  if (!built.ok) {
-    return { value: null, timestamp: ts(), status_hint: "no_data", reason: built.reason };
+  //
+  // The credentials belong to the operator's PROMETHEUS_SERVER_URL. A metric
+  // may point at another Prometheus (config.prometheus_url, set from the
+  // cloud); sending the operator's credentials there would hand them to
+  // whoever controls that URL. So they go only to the operator's origin.
+  let headers: Record<string, string> = {};
+  if (sameOrigin(queryUrl, env.prometheusUrl)) {
+    const built = buildPrometheusHeaders(env);
+    if (!built.ok) {
+      return { value: null, timestamp: ts(), status_hint: "no_data", reason: built.reason };
+    }
+    headers = built.headers;
   }
-  const headers = built.headers;
 
   const controller = new AbortController();
   const timeoutMs = env.prometheusTimeoutMs ?? 10_000;

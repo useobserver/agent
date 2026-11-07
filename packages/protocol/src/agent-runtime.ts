@@ -88,6 +88,10 @@ export const AGENT_ENV: readonly AgentEnvVar[] = Object.freeze([
   v("OBSERVER_OTLP_BEARER_TOKEN", null, "agent", { secret: true }),
   v("OBSERVER_OTLP_MAX_BUFFER_POINTS", "1000", "agent"),
   v("OBSERVER_OTLP_MAX_BODY_BYTES", "16777216", "agent"),
+  // Probe secret refs: comma-separated env var names (trailing * = prefix) a
+  // metric config may name in header_refs / token_ref / connection_string_ref
+  // etc. Unset = any name except the agent's own secrets.
+  v("OBSERVER_PROBE_SECRET_REFS", null, "agent", { since: "1.8.0" }),
 
   // Managed prober mode (src/prober/main.ts)
   v("OBSERVER_PROBER_KEY", null, "prober", { required: true, secret: true, since: "1.7.0" }),
@@ -144,4 +148,19 @@ export const AGENT_RUNTIME = Object.freeze({
 
 export function agentEnvVar(name: string): AgentEnvVar | undefined {
   return AGENT_ENV.find((e) => e.name === name || e.aliases?.includes(name));
+}
+
+// Agent-internal secrets a cloud-supplied probe config may never name as a
+// secret ref (header_refs, metadata_refs, token_ref, *_cert_ref,
+// connection_string_ref, ...). A probe sends a ref's value to the target the
+// same config chooses, so without this any principal who can write a metric
+// could read the agent's own credentials (AGENT_KEY etc.). Derived from this
+// list (secret vars owned by the agent or the prober, plus aliases) so a new
+// agent secret is covered automatically. Runtime/SDK secrets such as
+// AWS_SECRET_ACCESS_KEY stay nameable: customers legitimately use them as
+// probe credentials.
+export function isAgentInternalSecretEnv(name: string): boolean {
+  if (typeof name !== "string" || name.length === 0) return false;
+  const e = agentEnvVar(name);
+  return !!e && e.secret && (e.scope === "agent" || e.scope === "prober");
 }

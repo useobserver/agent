@@ -175,6 +175,35 @@ function containsUnquotedSemicolon(sql: string): boolean {
 }
 
 const ALLOWED_LEADING = new Set(["SELECT", "WITH"]);
+
+const SIDE_EFFECT_FN = new RegExp(
+  "\\b(" +
+    [
+      "SETVAL",
+      "NEXTVAL",
+      "SET_CONFIG",
+      "PG_TERMINATE_BACKEND",
+      "PG_CANCEL_BACKEND",
+      "PG_RELOAD_CONF",
+      "PG_ROTATE_LOGFILE",
+      "PG_STAT_RESET\\w*",
+      "PG_SWITCH_WAL",
+      "PG_CREATE_RESTORE_POINT",
+      "PG_PROMOTE",
+      "PG_(?:TRY_)?ADVISORY_\\w+",
+      "LO_\\w+",
+      "PG_READ_FILE",
+      "PG_READ_BINARY_FILE",
+      "PG_LS_DIR",
+      "PG_FILE_WRITE",
+      "DBLINK\\w*",
+      "GET_LOCK",
+      "RELEASE_LOCK",
+      "RELEASE_ALL_LOCKS",
+      "LOAD_FILE",
+    ].join("|") +
+    ")\\s*\\(",
+);
 const DISALLOWED_LEADING = [
   "INSERT",
   "UPDATE",
@@ -248,23 +277,37 @@ export function checkSelectOnly(rawSql: string): QueryCheckResult {
     }
   }
 
+  const scrub = (text: string) =>
+    text
+      .replace(/'(?:[^'\\]|\\.|'')*'/g, "''")
+      .replace(/"((?:[^"\\]|\\.|"")*)"/g, (_m, inner: string) => inner.replace(/""/g, '"'));
+
+  // Comment forms the engines read differently. MySQL executes the body of
+  // a /*! ... */ comment, and treats "--" as a comment only when whitespace
+  // follows ("1--1" is arithmetic), so stripping either could hide live SQL.
+  const rawNoLiterals = scrub(rawSql);
+  if (/\/\*!/.test(rawNoLiterals)) {
+    return { ok: false, reason: "MySQL executable comments (/*! */) are not allowed" };
+  }
+  if (/--(?![ \t\r\n]|$)/.test(rawNoLiterals)) {
+    return { ok: false, reason: "a -- comment must be followed by a space" };
+  }
+
   // Reject state-changing constructs a SELECT/WITH leading keyword still
   // permits — the parser is defense-in-depth for a misprovisioned read-only
   // role, which is exactly where these matter. Strip string literals first so
   // an INTO/INSERT *inside a quoted string* (e.g. SELECT 'INSERT INTO x') is
-  // not a false positive.
-  const noLiterals = stripped
-    .replace(/'(?:[^'\\]|\\.|'')*'/g, "''")
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
-  const upperAll = noLiterals.toUpperCase();
+  // not a false positive. Double-quoted identifiers are unwrapped, not
+  // erased: "nextval"('s') calls nextval in both engines.
+  const upperAll = scrub(stripped).toUpperCase();
   // SELECT INTO (new table/temp), INTO OUTFILE / DUMPFILE (MySQL file write).
   if (/\bINTO\b/.test(upperAll)) {
     return { ok: false, reason: "INTO clause is not allowed" };
   }
-  // Known side-effecting functions (sequence mutation, session config, backend
-  // control, large-object/file IO, dblink). Read-only pg_* (e.g. pg_database_size)
-  // intentionally NOT denied.
-  if (/\b(SETVAL|NEXTVAL|SET_CONFIG|PG_TERMINATE_BACKEND|PG_CANCEL_BACKEND|LO_EXPORT|LO_IMPORT|PG_READ_FILE|PG_LS_DIR|DBLINK)\s*\(/.test(upperAll)) {
+  // Known side-effecting functions (sequence mutation, session config,
+  // backend/server control, locks, large-object/file IO, dblink). Read-only
+  // pg_* (e.g. pg_database_size) intentionally NOT denied.
+  if (SIDE_EFFECT_FN.test(upperAll)) {
     return { ok: false, reason: "side-effecting function is not allowed" };
   }
 

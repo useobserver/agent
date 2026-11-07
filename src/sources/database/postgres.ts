@@ -128,14 +128,27 @@ export async function runQuery(
     // postgres.js exposes a tag function for parameterized queries.
     // The probe contract takes a verbatim query string with no
     // interpolation, so we use the `.unsafe` escape hatch. The query
-    // is operator-supplied configuration; SELECT-only and read-only
-    // safeguards live at the dispatch layer above us.
+    // comes from cloud-side metric config, so the database itself enforces
+    // what the lexical SELECT-only check (@observer/probe-config) can only
+    // approximate:
+    //   - BEGIN READ ONLY: any write, DDL or nextval() fails in the engine,
+    //     whatever privileges the DSN's role has. (A transaction, not a
+    //     default_transaction_read_only startup parameter, because poolers
+    //     such as PgBouncer reject unknown startup parameters.)
+    //   - simple: false: the extended protocol runs exactly one statement.
+    //     postgres.js picks the simple protocol for an args-less unsafe(),
+    //     which executes "SELECT 1; DROP TABLE t" as two statements.
     //
     // Client-side deadline: statement_timeout is server-side only — a
     // network partition after connect leaves the promise hanging. Race
     // against statementTimeoutMs + slack; on loss, detach the abandoned
     // query promise so its eventual rejection can't go unhandled.
-    const queryPromise = sql.unsafe(query) as unknown as Promise<Array<Record<string, unknown>>>;
+    // `simple` is honoured by postgres.js 3.4.x (src/index.js unsafe()) but
+    // missing from its UnsafeQueryOptions typings.
+    const extendedProtocol = { simple: false } as unknown as Parameters<typeof sql.unsafe>[2];
+    const queryPromise = sql.begin("read only", (tx) =>
+      tx.unsafe(query, [], extendedProtocol),
+    ) as unknown as Promise<Array<Record<string, unknown>>>;
     const timedOut = Symbol("timeout");
     const raced = await Promise.race([
       queryPromise,

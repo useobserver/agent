@@ -13,6 +13,8 @@
 // `*_ref_invalid`. Both carry only the name and env var name, which are
 // not secret.
 
+import { readProbeRef } from "./_ref-policy.ts";
+
 export type SecretRefFailure = "missing" | "invalid";
 
 export type SecretRefResolution =
@@ -31,7 +33,7 @@ export function resolveSecretRefs(
   const values: Record<string, string> = { ...(inline ?? {}) };
   const secretValues: string[] = [];
   for (const [name, ref] of Object.entries(refs ?? {})) {
-    const raw = typeof ref === "string" && ref.length > 0 ? env[ref] : undefined;
+    const raw = typeof ref === "string" && ref.length > 0 ? readProbeRef(ref, env) : undefined;
     const value = typeof raw === "string" ? raw.trim() : "";
     if (!value) return { ok: false, failure: "missing", name, ref: String(ref) };
     if (!isLegalValue(value)) return { ok: false, failure: "invalid", name, ref: String(ref) };

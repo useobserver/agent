@@ -4,6 +4,7 @@
 //   - Agent: re-validates at execute() time as a defensive check
 //     (config can be edited out-of-band by privileged ops).
 
+import { configRefNames, isReservedAgentSecretRef } from "./reserved-refs";
 import type { ZodTypeAny } from "zod";
 import {
   PrometheusConfigSchema,
@@ -133,6 +134,15 @@ export function validateProbeWrite(values: ProbeWriteValues | null | undefined):
       code: "invalid_probe_config",
       message: `Invalid source_config for source_type "${sourceType}".`,
       issues: result.error.issues,
+    };
+  }
+
+  const reserved = configRefNames(result.data).filter(isReservedAgentSecretRef);
+  if (reserved.length > 0) {
+    return {
+      ok: false,
+      code: "invalid_probe_config",
+      message: `Secret refs cannot name the agent's own credentials (${[...new Set(reserved)].join(", ")}). Use a separate env var for the probe secret.`,
     };
   }
 

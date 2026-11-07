@@ -15,6 +15,9 @@ const SRC = join(import.meta.dir, "..", "src");
 // customer-named refs, never for a fixed var name.
 const AUDITED_DYNAMIC_READS = new Set([
   "sources/_header-refs.ts",
+  // The single gate every cloud-named ref goes through (agent-internal
+  // secrets refused, optional OBSERVER_PROBE_SECRET_REFS allowlist).
+  "sources/_ref-policy.ts",
   "sources/_mtls.ts",
   "sources/_secret-value.ts",
   "sources/database.ts",
