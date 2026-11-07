@@ -4,9 +4,9 @@ description: Observer Agent. Runs your checks inside your network and sends the 
 type: application
 # Chart version: independent semver. Bump the patch version with every agent
 # release (together with appVersion) and on chart-only fixes.
-version: 0.1.0
+version: 0.1.1
 # The agent version (apps/agent/package.json). tests/chart-version.test.ts enforces it.
-appVersion: "1.7.3"
+appVersion: "1.8.0"
 kubeVersion: ">=1.29.0-0"
 home: https://use.observer
 sources:
@@ -28,9 +28,11 @@ annotations:
     - name: Source
       url: https://github.com/useobserver/agent
   artifacthub.io/changes: |
-    - kind: added
-      description: First release of the Observer Agent chart
+    - kind: changed
+      description: Observer Agent 1.8.0
+    - kind: security
+      description: Agent 1.8.0 keeps metric secret refs off agent credentials and runs database probes read-only
   artifacthub.io/images: |
     - name: agent
-      image: ghcr.io/useobserver/agent:1.7.3
-  artifacthub.io/containsSecurityUpdates: "false"
+      image: ghcr.io/useobserver/agent:1.8.0
+  artifacthub.io/containsSecurityUpdates: "true"

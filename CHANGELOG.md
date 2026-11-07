@@ -5,6 +5,8 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+## 1.8.0 (2026-11-07)
+
 - New Helm chart in `charts/observer-agent`, published to
   `oci://ghcr.io/useobserver/charts/observer-agent`: one replica with its queue on a
   PersistentVolumeClaim, a read-only root filesystem, workload identity through
