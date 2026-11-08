@@ -1,0 +1,320 @@
+name: Helm chart
+
+# Public mirror Helm chart CI + publish (useobserver/agent). Source of truth:
+# the monorepo's tools/mirror-agent/templates/chart.yml. SSH deploy keys
+# cannot push workflow files, so this file is installed in
+# .github/workflows/ by hand; edit the template, then copy it over.
+#
+# Jobs:
+#   lint-test   helm lint, ct lint, helm-unittest, kubeconform (PR + push)
+#   kind-smoke  installs the chart on kind against a mock Observer Cloud,
+#               checks heartbeats and result batches arrive, restarts the pod
+#               on the same PVC, uninstalls (PR + push + nightly; four
+#               Kubernetes versions)
+#   upgrade     installs the last published chart, upgrades to HEAD, checks
+#               the pod is Ready and the PVC survived (PR + push; skipped
+#               until a version is published)
+#   publish     push to main: when Chart.yaml's version is not in the
+#               registry yet, package, push to oci://ghcr.io/<owner>/charts,
+#               sign keyless with cosign, push artifacthub-repo.yml
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CHART_DIR: charts/observer-agent
+  HELM_VERSION: v4.3.1
+  HELM_UNITTEST_VERSION: 1.2.1
+  HELM_UNITTEST_SHA256: 48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
+  KUBECONFORM_VERSION: 0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+  KIND_VERSION: v0.33.0
+  # The four newest Kubernetes minors with a kindest/node image (kind v0.33.0).
+  KUBE_VERSIONS: "1.37.0 1.36.4 1.35.8 1.34.11"
+
+jobs:
+  lint-test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install helm-unittest and kubeconform
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSLo unittest.tgz "https://github.com/helm-unittest/helm-unittest/releases/download/v${HELM_UNITTEST_VERSION}/helm-unittest-linux-amd64-${HELM_UNITTEST_VERSION}.tgz"
+          echo "${HELM_UNITTEST_SHA256}  unittest.tgz" | sha256sum -c -
+          tar -xzf unittest.tgz untt-linux-amd64 && mv untt-linux-amd64 bin/helm-unittest
+          curl -fsSLo kubeconform.tgz "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tgz" | sha256sum -c -
+          tar -xzf kubeconform.tgz kubeconform && mv kubeconform bin/
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: helm lint (every ci/*.yaml)
+        run: |
+          for f in "$CHART_DIR"/ci/*.yaml; do
+            echo "::group::helm lint $f"
+            helm lint --strict "$CHART_DIR" -f "$f"
+            echo "::endgroup::"
+          done
+
+      - uses: helm/chart-testing-action@v2
+      - name: ct lint
+        run: ct lint --charts "$CHART_DIR" --validate-maintainers=false --check-version-increment=false
+
+      - name: helm-unittest
+        run: helm-unittest "$CHART_DIR"
+
+      - name: kubeconform
+        run: |
+          for v in $KUBE_VERSIONS; do
+            for f in "$CHART_DIR"/ci/*.yaml; do
+              echo "k8s $v, $f"
+              helm template observer-agent "$CHART_DIR" -f "$f" --kube-version "$v" \
+                | kubeconform -strict -summary -kubernetes-version "$v" -
+            done
+          done
+
+  kind-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # kind v0.33.0 release images, pinned by digest as kind asks.
+        node:
+          - kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          - kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+          - kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+          - kindest/node:v1.34.11@sha256:44e222ee2132dab25ff87301682f89eb82c7880ea3a1bf543bfe9708fd08d67d
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - uses: helm/kind-action@v1
+        with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: ${{ matrix.node }}
+          cluster_name: smoke
+
+      # The agent image is built from this commit, so the chart and the agent
+      # it ships are tested together (the release image may not exist yet).
+      - name: Build the agent image and load it into kind
+        run: |
+          docker build -t observer-agent:smoke .
+          kind load docker-image observer-agent:smoke --name smoke
+
+      - name: Start the mock cloud
+        run: |
+          kubectl create configmap mock-cloud --from-file=server.ts=tests/mock-cloud/server.ts
+          kubectl apply -f tests/mock-cloud/mock-cloud.yaml
+          kubectl wait --for=condition=Ready pod/mock-cloud --timeout=180s
+
+      - name: Install the chart
+        run: |
+          helm install observer-agent "$CHART_DIR" \
+            --set cloudUrl=http://mock-cloud.default.svc:8080 \
+            --set agentKey=obs_live_kindsmoke \
+            --set securityContext.readOnlyRootFilesystem=true \
+            --set image.repository=observer-agent \
+            --set image.tag=smoke \
+            --set image.pullPolicy=Never \
+            --wait --timeout 3m
+
+      - name: Check heartbeats and result batches arrive
+        run: |
+          deadline=$((SECONDS + 180))
+          while :; do
+            out=$(kubectl exec mock-cloud -- wget -qO- http://127.0.0.1:8080/_assert)
+            echo "$out"
+            hb=$(echo "$out" | jq .heartbeats); bt=$(echo "$out" | jq .batches)
+            if [ "$hb" -ge 1 ] && [ "$bt" -ge 1 ]; then break; fi
+            if [ $SECONDS -ge $deadline ]; then echo "::error::no heartbeat or batch within 3 minutes"; kubectl logs deploy/observer-agent --tail=100; exit 1; fi
+            sleep 5
+          done
+          echo "$out" | jq -e '.agent_keys == ["obs_live_kindsmoke"]'
+          echo "### /_assert (${{ matrix.node }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$out\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Restart the pod on the same PVC
+        run: |
+          before_pod=$(kubectl get pod -l app.kubernetes.io/instance=observer-agent -o jsonpath='{.items[0].metadata.name}')
+          before_pv=$(kubectl get pvc observer-agent -o jsonpath='{.spec.volumeName}')
+          kubectl delete pod "$before_pod" --wait=true
+          kubectl rollout status deploy/observer-agent --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=observer-agent --timeout=180s
+          after_pod=$(kubectl get pod -l app.kubernetes.io/instance=observer-agent -o jsonpath='{.items[0].metadata.name}')
+          claim=$(kubectl get pod "$after_pod" -o jsonpath='{.spec.volumes[?(@.name=="data")].persistentVolumeClaim.claimName}')
+          after_pv=$(kubectl get pvc observer-agent -o jsonpath='{.spec.volumeName}')
+          echo "pod $before_pod -> $after_pod, claim $claim, volume $before_pv -> $after_pv"
+          test "$before_pod" != "$after_pod"
+          test "$claim" = observer-agent
+          test -n "$before_pv" && test "$before_pv" = "$after_pv"
+
+      - name: Uninstall
+        run: |
+          helm uninstall observer-agent --wait --timeout 2m
+          left=$(kubectl get deploy,svc,secret,sa,pvc -l app.kubernetes.io/instance=observer-agent -o name)
+          if [ -n "$left" ]; then echo "::error::left behind: $left"; exit 1; fi
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl get all,pvc -A
+          kubectl describe pod -l app.kubernetes.io/instance=observer-agent || true
+          kubectl logs deploy/observer-agent --tail=200 || true
+          kubectl logs mock-cloud --tail=100 || true
+
+  upgrade:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Find the last published chart
+        id: prev
+        run: |
+          owner="${{ github.repository_owner }}"
+          ref="oci://ghcr.io/${owner,,}/charts/observer-agent"
+          head=$(helm show chart "$CHART_DIR" | awk '/^version:/ {print $2}')
+          if prev=$(helm show chart "$ref" 2>/dev/null | awk '/^version:/ {print $2}') && [ -n "$prev" ] && [ "$prev" != "$head" ]; then
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+            echo "version=$prev" >> "$GITHUB_OUTPUT"
+            echo "Upgrading $prev -> $head"
+          else
+            echo "No earlier published version to upgrade from; skipping."
+          fi
+
+      - uses: helm/kind-action@v1
+        if: steps.prev.outputs.version != ''
+        with:
+          version: ${{ env.KIND_VERSION }}
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          cluster_name: upgrade
+
+      - name: Build the agent image and load it into kind
+        if: steps.prev.outputs.version != ''
+        run: |
+          docker build -t observer-agent:smoke .
+          kind load docker-image observer-agent:smoke --name upgrade
+
+      - name: Start the mock cloud
+        if: steps.prev.outputs.version != ''
+        run: |
+          kubectl create configmap mock-cloud --from-file=server.ts=tests/mock-cloud/server.ts
+          kubectl apply -f tests/mock-cloud/mock-cloud.yaml
+          kubectl wait --for=condition=Ready pod/mock-cloud --timeout=180s
+
+      - name: Install the published chart, upgrade to HEAD
+        if: steps.prev.outputs.version != ''
+        run: |
+          args=(--set cloudUrl=http://mock-cloud.default.svc:8080 --set agentKey=obs_live_kindsmoke --wait --timeout 3m)
+          helm install observer-agent "${{ steps.prev.outputs.ref }}" --version "${{ steps.prev.outputs.version }}" "${args[@]}"
+          before_pv=$(kubectl get pvc observer-agent -o jsonpath='{.spec.volumeName}')
+          # HEAD runs the agent built from this commit (its image may not be released yet).
+          helm upgrade observer-agent "$CHART_DIR" "${args[@]}" \
+            --set image.repository=observer-agent --set image.tag=smoke --set image.pullPolicy=Never
+          kubectl rollout status deploy/observer-agent --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=observer-agent --timeout=180s
+          after_pv=$(kubectl get pvc observer-agent -o jsonpath='{.spec.volumeName}')
+          echo "volume $before_pv -> $after_pv"
+          test -n "$before_pv" && test "$before_pv" = "$after_pv"
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint-test, kind-smoke, upgrade]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing (GitHub OIDC)
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Is this chart version published?
+        id: check
+        run: |
+          owner="${{ github.repository_owner }}"
+          echo "registry=ghcr.io/${owner,,}/charts" >> "$GITHUB_OUTPUT"
+          version=$(helm show chart "$CHART_DIR" | awk '/^version:/ {print $2}')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if helm show chart "oci://ghcr.io/${owner,,}/charts/observer-agent" --version "$version" >/dev/null 2>&1; then
+            echo "Chart $version is already published; nothing to do."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package and push
+        id: push
+        if: steps.check.outputs.publish == 'true'
+        env:
+          REGISTRY: ${{ steps.check.outputs.registry }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package "$CHART_DIR" -d "$RUNNER_TEMP/chart"
+          helm push "$RUNNER_TEMP"/chart/observer-agent-*.tgz "oci://$REGISTRY" 2>&1 | tee "$RUNNER_TEMP/push.log"
+          digest=$(awk '/^Digest:/ {print $2}' "$RUNNER_TEMP/push.log")
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@v4
+        if: steps.check.outputs.publish == 'true'
+
+      - name: Sign (keyless)
+        if: steps.check.outputs.publish == 'true'
+        env:
+          REF: ${{ steps.check.outputs.registry }}/observer-agent@${{ steps.push.outputs.digest }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
+          cosign sign --yes "$REF"
+
+      - uses: oras-project/setup-oras@v2
+        if: steps.check.outputs.publish == 'true'
+
+      - name: Push Artifact Hub metadata
+        if: steps.check.outputs.publish == 'true'
+        env:
+          REGISTRY: ${{ steps.check.outputs.registry }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          oras push "$REGISTRY/observer-agent:artifacthub.io" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+
+      - name: Summary
+        run: |
+          {
+            echo "### Helm chart"
+            echo
+            echo "Version: \`${{ steps.check.outputs.version }}\`"
+            echo "Published: \`${{ steps.check.outputs.publish }}\`"
+            if [ -n "${{ steps.push.outputs.digest }}" ]; then echo "Digest: \`${{ steps.push.outputs.digest }}\`"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
