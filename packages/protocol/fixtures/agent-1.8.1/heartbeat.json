@@ -1,0 +1,25 @@
+{
+  "method": "POST",
+  "path": "/api/agent/heartbeat",
+  "query": {},
+  "has_agent_key": true,
+  "content_type": "application/json",
+  "body": {
+    "version": "1.8.1",
+    "uptime_seconds": 0,
+    "buffer_size": 0,
+    "buffer_oldest_age_seconds": 0,
+    "queue_depth": 0,
+    "queue_oldest_age_seconds": 0,
+    "queue_capacity": 200000,
+    "agent_started_at": "2026-11-08T08:16:24.061Z",
+    "source_types_active": [],
+    "custom_probes": [],
+    "build": {
+      "channel": "source",
+      "commit": null,
+      "source_hash": "unavailable"
+    },
+    "hostname": "fixture-host"
+  }
+}
