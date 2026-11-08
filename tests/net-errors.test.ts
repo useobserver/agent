@@ -38,6 +38,8 @@ describe("normaliseNetCode", () => {
     expect(normaliseNetCode("ERR_TLS_CERT_ALTNAME_INVALID", "x")).toBe("ERR_TLS_CERT_ALTNAME_INVALID");
     expect(normaliseNetCode("ERR_SSL_WRONG_VERSION_NUMBER", "x")).toBe("tls_handshake_failed");
     expect(normaliseNetCode("ERR_TLS_HANDSHAKE_TIMEOUT", "x")).toBe("tls_handshake_failed");
+    // Bun 1.4 fetch: handshake aborted by the server (e.g. no SNI sent).
+    expect(normaliseNetCode("EPROTO", "x")).toBe("tls_handshake_failed");
   });
 
   it("returns the fallback for unknown or missing codes", () => {

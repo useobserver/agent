@@ -5,6 +5,11 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+## 1.8.1 (2026-11-08)
+
+- When a server aborts the TLS handshake, checks now report `tls_handshake_failed` instead of
+  a generic `http_error`.
+
 ## 1.8.0 (2026-11-07)
 
 - New Helm chart in `charts/observer-agent`, published to

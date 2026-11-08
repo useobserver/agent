@@ -279,6 +279,31 @@ describe("proberHttp", () => {
     await proberHttp({ url: "http://public.example.com:8080/ok", timeout_ms: 3000 } as never, deps());
     expect(lastHeaders.host).toBe("public.example.com:8080");
   });
+  it("sends the configured name as TLS SNI when dialling the vetted IP", async () => {
+    // Raw TCP listener: capture the ClientHello, then hang up. The SNI
+    // extension carries the server name in plain text. Without an explicit
+    // serverName, Bun 1.4 sends none and SNI-routed hosts (Cloudflare) fail.
+    let hello = Buffer.alloc(0);
+    const raw = net.createServer((sock) => {
+      sock.once("data", (d) => {
+        hello = Buffer.from(d);
+        sock.destroy();
+      });
+    });
+    await new Promise<void>((r) => raw.listen(0, "127.0.0.1", () => r()));
+    const rawPort = (raw.address() as net.AddressInfo).port;
+    try {
+      const r = await proberHttp(
+        { url: "https://public.example.com/ok", timeout_ms: 3000, verify_tls: false } as never,
+        deps({ dialTarget: () => ({ ip: "127.0.0.1", family: 4, port: rawPort }) }),
+      );
+      expect(r.status_hint).toBe("no_data");
+      expect(hello.length).toBeGreaterThan(0);
+      expect(hello.includes(Buffer.from("public.example.com"))).toBe(true);
+    } finally {
+      await new Promise((r) => raw.close(r));
+    }
+  });
   it("refuses a private target before connecting", async () => {
     let dialed = false;
     const r = await proberHttp({ url: "http://private.example.com/ok" } as never, deps({ dialTarget: () => ((dialed = true), { ip: "127.0.0.1", family: 4, port }) }));

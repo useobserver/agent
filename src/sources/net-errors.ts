@@ -87,6 +87,9 @@ const ALIASES: Record<string, NetReasonCode> = {
   CERT_REVOKED: "tls_handshake_failed",
   CERT_SIGNATURE_FAILURE: "tls_handshake_failed",
   HOSTNAME_MISMATCH: "ERR_TLS_CERT_ALTNAME_INVALID",
+  // Bun fetch over https: the server aborted the TLS handshake (for example
+  // no SNI sent to an SNI-routed host). Measured on Bun 1.4.
+  EPROTO: "tls_handshake_failed",
 };
 
 // Bun codes that do not say WHY the connection failed. Bun's fetch reports

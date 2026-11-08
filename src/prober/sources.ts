@@ -153,6 +153,11 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
       pinned.hostname = target.family === 6 ? `[${target.ip}]` : target.ip;
       pinned.port = String(target.port);
       const identity = vetted.hostname;
+      // The URL holds the vetted IP, so the TLS server name (SNI) must be set
+      // explicitly: Bun does not derive it from the Host header (1.4 sends no
+      // SNI at all), and SNI-routed servers such as Cloudflare then fail the
+      // handshake with EPROTO. No SNI for an IP-literal target (RFC 6066).
+      const serverName = vetted.hostname === vetted.ip ? undefined : vetted.hostname;
 
       res = await fetch(pinned.toString(), {
         method,
@@ -160,6 +165,7 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
         signal: controller.signal,
         redirect: "manual",
         tls: {
+          ...(serverName ? { serverName } : {}),
           rejectUnauthorized: verifyTls,
           // Verify the certificate against the name the tenant configured,
           // not the IP we dialled.
