@@ -5,6 +5,8 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+## 1.8.2 (2026-11-08)
+
 - Managed probers check their own network every 15 seconds and hold results until a check passes, so a prober that loses its connection no longer reports its targets as down.
 - Managed probers recognise bot-protection challenge pages (Cloudflare, AWS WAF, Vercel, DataDome) and mark those results, so Observer leaves that location out of the check's status instead of reading the challenge as an outage.
 - Managed probers tell Observer when they cannot measure (network down, or the wrong location), so that time is recorded as an Observer probe outage.

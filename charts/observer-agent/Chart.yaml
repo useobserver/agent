@@ -4,9 +4,9 @@ description: Observer Agent. Runs your checks inside your network and sends the 
 type: application
 # Chart version: independent semver. Bump the patch version with every agent
 # release (together with appVersion) and on chart-only fixes.
-version: 0.1.2
+version: 0.1.3
 # The agent version (apps/agent/package.json). tests/chart-version.test.ts enforces it.
-appVersion: "1.8.1"
+appVersion: "1.8.2"
 kubeVersion: ">=1.29.0-0"
 home: https://use.observer
 sources:
@@ -28,9 +28,9 @@ annotations:
     - name: Source
       url: https://github.com/useobserver/agent
   artifacthub.io/changes: |
-    - kind: fixed
-      description: Observer Agent 1.8.1 reports aborted TLS handshakes as tls_handshake_failed
+    - kind: changed
+      description: Observer Agent 1.8.2 managed probers pause on network loss and recognise bot-challenge pages
   artifacthub.io/images: |
     - name: agent
-      image: ghcr.io/useobserver/agent:1.8.1
+      image: ghcr.io/useobserver/agent:1.8.2
   artifacthub.io/containsSecurityUpdates: "false"
