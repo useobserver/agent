@@ -25,7 +25,7 @@ import {
 import icmpSource from "../sources/icmp.ts";
 import { createResolver, parseDnsServers } from "./guard.ts";
 import { runProberCheck } from "./runner.ts";
-import type { ProberDeps } from "./sources.ts";
+import { BOT_CHALLENGE_REASON, proberHttp, type ProberDeps } from "./sources.ts";
 
 export interface ProberConfig {
   cloudUrl: string;
@@ -103,20 +103,51 @@ interface Scheduled {
 
 type Log = (level: "INFO" | "WARN" | "ERROR", msg: string) => void;
 
+// Network self-check. Two control targets on different providers, fetched
+// through the same guarded path as tenant checks (public resolvers, SSRF
+// guard, pinned IP, SNI). Any HTTP answer from either one proves the host can
+// reach the internet; both failing means this host's network is broken, and
+// its results would read as outages of every target it checks.
+export const PROBER_CONTROL_URLS = ["https://www.gstatic.com/generate_204", "https://1.1.1.1/cdn-cgi/trace"];
+export const PROBER_SELF_CHECK_MS = 15_000;
+
+export async function proberNetworkOk(deps: ProberDeps): Promise<boolean> {
+  const results = await Promise.all(
+    PROBER_CONTROL_URLS.map((url) =>
+      proberHttp({ url, method: "GET", timeout_ms: 5_000, expected_status: [200, 204] } as never, deps),
+    ),
+  );
+  return results.some((r) => r.value !== null || String(r.reason ?? "").startsWith("unexpected_status"));
+}
+
 export interface ProberHandle {
   refreshOnce(): Promise<void>;
   runDue(): Promise<void>;
   flushOnce(): Promise<void>;
+  /** One network self-check round (no-op without opts.selfCheck). */
+  selfCheckOnce(): Promise<void>;
   start(): void;
   stop(): Promise<void>;
   /** Introspection for tests and the boot log. */
-  state(): { location: string | null; checks: number; queued: number; refused: boolean };
+  state(): { location: string | null; checks: number; queued: number; refused: boolean; networkOk: boolean };
 }
 
 export function createProber(
   cfg: ProberConfig,
   deps: ProberDeps,
-  opts: { fetch?: typeof fetch; now?: () => number; random?: () => number; log?: Log } = {},
+  opts: {
+    fetch?: typeof fetch;
+    now?: () => number;
+    random?: () => number;
+    log?: Log;
+    /**
+     * Network self-check (proberNetworkOk in production). When set, a result
+     * is sent only once a later self-check round has passed, so results taken
+     * while the host network was down are dropped instead of reported. Unset,
+     * every result is sent as soon as it is ready.
+     */
+    selfCheck?: () => Promise<boolean>;
+  } = {},
 ): ProberHandle {
   const doFetch = opts.fetch ?? fetch;
   const now = opts.now ?? Date.now;
@@ -124,7 +155,11 @@ export function createProber(
   const log: Log = opts.log ?? ((level, msg) => console.log(`[${level}] [prober] ${msg}`));
 
   const scheduled = new Map<string, Scheduled>();
-  let queue: ProberResultItem[] = [];
+  // `at` = when the result was ready. Only results ready at or before the
+  // start of the last passing self-check round (`verifiedAt`) are sent.
+  let queue: Array<{ item: ProberResultItem; at: number }> = [];
+  let verifiedAt = opts.selfCheck ? -Infinity : Infinity;
+  let networkOk = true;
   let version: string | null = null;
   let location: string | null = null;
   let refused = false;
@@ -133,6 +168,7 @@ export function createProber(
   let flushBackoffMs = 0;
   let nextFlushAt = 0;
   let droppedTotal = 0;
+  const challengeLoggedAt = new Map<string, number>();
   const timers: Array<ReturnType<typeof setInterval>> = [];
   const running = new Set<Promise<void>>();
 
@@ -205,7 +241,7 @@ export function createProber(
   }
 
   function enqueue(item: ProberResultItem): void {
-    queue.push(item);
+    queue.push({ item, at: now() });
     if (queue.length > cfg.queueMax) {
       const drop = queue.length - cfg.queueMax;
       queue = queue.slice(drop);
@@ -214,8 +250,37 @@ export function createProber(
     }
   }
 
+  async function selfCheckOnce(): Promise<void> {
+    if (!opts.selfCheck) return;
+    const startedAt = now();
+    let ok = false;
+    try {
+      ok = await opts.selfCheck();
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      verifiedAt = Math.max(verifiedAt, startedAt);
+      if (!networkOk) log("INFO", "network self-check passed again; running checks");
+      networkOk = true;
+      return;
+    }
+    // Results not yet covered by a passing round may have been taken while
+    // the network was already down: drop them rather than report outages.
+    const keep = queue.filter((q) => q.at <= verifiedAt);
+    const dropped = queue.length - keep.length;
+    queue = keep;
+    if (networkOk) {
+      log(
+        "ERROR",
+        `network self-check failed (no control target reachable); pausing checks and dropping ${dropped} unverified result(s)`,
+      );
+    }
+    networkOk = false;
+  }
+
   async function runDue(): Promise<void> {
-    if (refused) return;
+    if (refused || !networkOk) return;
     const t = now();
     const batch: Promise<void>[] = [];
     for (const s of scheduled.values()) {
@@ -228,7 +293,19 @@ export function createProber(
       const p = runProberCheck(s.check, deps)
         .then((item) => {
           // Dropped from the set mid-run (deleted / reassigned): discard.
-          if (scheduled.get(s.check.id) === s) enqueue(item);
+          if (scheduled.get(s.check.id) !== s) return;
+          // A bot-challenge page says nothing about the target, so this
+          // location abstains: no result, and the check's other locations
+          // decide (the cloud ignores a location without a fresh result).
+          if (item.reason === BOT_CHALLENGE_REASON) {
+            const last = challengeLoggedAt.get(s.check.id) ?? -Infinity;
+            if (now() - last >= 60 * 60_000) {
+              challengeLoggedAt.set(s.check.id, now());
+              log("WARN", `check ${s.check.id} got a bot-challenge page; not reporting it from this location`);
+            }
+            return;
+          }
+          enqueue(item);
         })
         .catch(() => {})
         .finally(() => {
@@ -244,7 +321,10 @@ export function createProber(
 
   async function flushOnce(): Promise<void> {
     if (queue.length === 0 || now() < nextFlushAt) return;
-    const batch = queue.slice(0, PROBER_RESULTS_MAX_BATCH);
+    let ready = 0;
+    while (ready < queue.length && ready < PROBER_RESULTS_MAX_BATCH && queue[ready].at <= verifiedAt) ready++;
+    if (ready === 0) return;
+    const batch = queue.slice(0, ready).map((q) => q.item);
     let res: Response;
     try {
       res = await doFetch(`${cfg.cloudUrl}${PROBER_RESULTS_PATH}`, {
@@ -292,8 +372,12 @@ export function createProber(
     refreshOnce,
     runDue,
     flushOnce,
+    selfCheckOnce,
     start() {
-      void refreshOnce().then(() => runDue());
+      void selfCheckOnce()
+        .then(() => refreshOnce())
+        .then(() => runDue());
+      if (opts.selfCheck) timers.push(setInterval(() => void selfCheckOnce(), PROBER_SELF_CHECK_MS));
       timers.push(setInterval(() => void refreshOnce(), cfg.refreshMs));
       timers.push(setInterval(() => void runDue(), 1_000));
       timers.push(setInterval(() => void flushOnce(), cfg.flushMs));
@@ -302,11 +386,12 @@ export function createProber(
       for (const t of timers) clearInterval(t);
       timers.length = 0;
       await Promise.allSettled([...running]);
-      // Best effort: one last flush so a rolling restart loses little.
+      // Best effort: verify, then one last flush so a rolling restart loses little.
+      await selfCheckOnce().catch(() => {});
       nextFlushAt = 0;
       await flushOnce().catch(() => {});
     },
-    state: () => ({ location, checks: scheduled.size, queued: queue.length, refused }),
+    state: () => ({ location, checks: scheduled.size, queued: queue.length, refused, networkOk }),
   };
 }
 

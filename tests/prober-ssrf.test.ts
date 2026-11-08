@@ -4,6 +4,7 @@ import net from "node:net";
 import { checkResolverAddress, checkTargetHost, classifyIp, validateOutsideInConfig } from "@observer/probe-config";
 import { vetHost, parseDnsServers, type ResolveFn } from "../src/prober/guard";
 import { proberDns, proberHttp, proberIcmp, proberTcp, proberTlsCert, type ProberDeps } from "../src/prober/sources";
+import { createProber } from "../src/prober/prober";
 
 // Managed-prober SSRF suite. Each blocked class is asserted on its own so a
 // regression names the exact range that reopened.
@@ -245,6 +246,13 @@ beforeAll(async () => {
       return void pump();
     }
     if (u === "/slow") return; // never answers
+    if (u === "/cf-challenge") return void res.writeHead(403, { "cf-mitigated": "challenge", server: "cloudflare" }).end("<html></html>");
+    if (u === "/cf-body")
+      return void res
+        .writeHead(403, { server: "cloudflare" })
+        .end("<html><head><title>Just a moment...</title></head><script src=/cdn-cgi/challenge-platform/x></script></html>");
+    if (u === "/cf-plain-403") return void res.writeHead(403, { server: "cloudflare" }).end("Forbidden");
+    if (u === "/aws-captcha") return void res.writeHead(429, { "x-amzn-waf-action": "captcha" }).end();
     res.writeHead(404).end();
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -356,6 +364,26 @@ describe("proberHttp", () => {
     const r = await proberHttp({ url: "http://public.example.com/big", json_path: "$.a", timeout_ms: 8000 } as never, deps());
     expect(r.reason).toBe("json_body_too_large");
   });
+  it("reports a Cloudflare challenge header as bot_challenge, not a failed status", async () => {
+    const r = await proberHttp({ url: "http://public.example.com/cf-challenge" } as never, deps());
+    expect(r).toMatchObject({ status_hint: "no_data", reason: "bot_challenge", metadata: { status: 403 } });
+  });
+  it("recognises Cloudflare's challenge page body without the header", async () => {
+    const r = await proberHttp({ url: "http://public.example.com/cf-body" } as never, deps());
+    expect(r.reason).toBe("bot_challenge");
+  });
+  it("recognises an AWS WAF CAPTCHA", async () => {
+    const r = await proberHttp({ url: "http://public.example.com/aws-captcha" } as never, deps());
+    expect(r.reason).toBe("bot_challenge");
+  });
+  it("a plain 403 from Cloudflare stays a failed status", async () => {
+    const r = await proberHttp({ url: "http://public.example.com/cf-plain-403" } as never, deps());
+    expect(r.reason).toBe("unexpected_status:403");
+  });
+  it("a challenge status the check expects is not treated as a challenge", async () => {
+    const r = await proberHttp({ url: "http://public.example.com/cf-challenge", expected_status: [403] } as never, deps());
+    expect(r.status_hint).toBeUndefined();
+  });
   it("caps total time", async () => {
     const t0 = Date.now();
     const r = await proberHttp({ url: "http://public.example.com/slow", timeout_ms: 300 } as never, deps());
@@ -428,3 +456,37 @@ describe("validateOutsideInConfig (shared cloud + prober policy)", () => {
     expect(validateOutsideInConfig("http", { url: "https://example.com", headers: { Host: "internal" } }).ok).toBe(false);
   });
 });
+
+describe("prober loop and bot challenges", () => {
+  it("does not send a bot-challenge result; other results still go out", async () => {
+    const mk = (id: string, path: string) => ({
+      id,
+      source_type: "http",
+      source_config: { url: `http://public.example.com${path}` },
+      interval: 1,
+      healthy_operation: "under",
+      healthy_value: 1000,
+      unhealthy_operation: "over",
+      unhealthy_value: 3000,
+    });
+    const checks = [mk("00000000-0000-4000-8000-00000000000a", "/cf-challenge"), mk("00000000-0000-4000-8000-00000000000b", "/ok")];
+    const posted: unknown[] = [];
+    const logs: string[] = [];
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/prober/checks")) return new Response(JSON.stringify({ location: "eu-central", version: "v1", checks }), { status: 200 });
+      posted.push(...JSON.parse(String(init?.body)).results);
+      return new Response(JSON.stringify({ accepted: 1, rejected: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const p = createProber(
+      { cloudUrl: "https://cloud.test", key: "obs_prb_k", expectedLocation: null, dnsServers: ["1.1.1.1"], icmp: "off", concurrency: 4, refreshMs: 30_000, flushMs: 5_000, queueMax: 100, version: "0" },
+      deps(),
+      { fetch: fetchFn, random: () => 0, log: (_l, m) => logs.push(m) },
+    );
+    await p.refreshOnce();
+    await p.runDue();
+    await p.flushOnce();
+    expect(posted.map((r) => (r as { metric_id: string }).metric_id)).toEqual(["00000000-0000-4000-8000-00000000000b"]);
+    expect(logs.some((m) => m.includes("bot-challenge"))).toBe(true);
+  });
+});
+

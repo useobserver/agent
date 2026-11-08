@@ -5,6 +5,9 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+- Managed probers check their own network every 15 seconds and hold results until a check passes, so a prober that loses its connection no longer reports its targets as down.
+- Managed probers recognise bot-protection challenge pages (Cloudflare, AWS WAF, Vercel, DataDome) and skip reporting that check from that location, so a challenge no longer reads as an outage.
+
 ## 1.8.1 (2026-11-08)
 
 - When a server aborts the TLS handshake, checks now report `tls_handshake_failed` instead of

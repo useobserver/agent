@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ProberCheck } from "@observer/protocol";
 import { executeProberCheck, runProberCheck } from "../src/prober/runner";
-import { PROBER_INFO_URL, createProber, loadProberConfig, proberUserAgent, type ProberConfig } from "../src/prober/prober";
+import { PROBER_INFO_URL, createProber, loadProberConfig, proberNetworkOk, proberUserAgent, type ProberConfig } from "../src/prober/prober";
 import type { ProberDeps } from "../src/prober/sources";
 
 const deps: ProberDeps = {
@@ -181,3 +181,61 @@ describe("createProber loop", () => {
     expect(p.state().checks).toBe(0);
   });
 });
+
+describe("network self-check", () => {
+  it("sends a result only after a later self-check round passes", async () => {
+    const cloud = mockCloud([check()]);
+    let t = 1_000;
+    const p = createProber(cfg(), deps, { fetch: cloud.fetchFn, now: () => t, random: () => 0, log: () => {}, selfCheck: async () => true });
+    await p.refreshOnce();
+    await p.runDue();
+    t += 1;
+    await p.flushOnce();
+    expect(cloud.calls.some((c) => c.url.endsWith("/results"))).toBe(false);
+    await p.selfCheckOnce();
+    await p.flushOnce();
+    expect(cloud.calls.filter((c) => c.url.endsWith("/results")).length).toBe(1);
+    expect(p.state().queued).toBe(0);
+  });
+
+  it("drops unverified results and pauses checks while the network is down", async () => {
+    const cloud = mockCloud([check()]);
+    let t = 1_000;
+    let up = true;
+    const p = createProber(cfg(), deps, { fetch: cloud.fetchFn, now: () => t, random: () => 0, log: () => {}, selfCheck: async () => up });
+    await p.selfCheckOnce();
+    await p.refreshOnce();
+    t += 1;
+    await p.runDue();
+    expect(p.state().queued).toBe(1);
+    up = false;
+    t += 1;
+    await p.selfCheckOnce();
+    expect(p.state()).toMatchObject({ networkOk: false, queued: 0 });
+    t += 60_000;
+    await p.runDue();
+    expect(p.state().queued).toBe(0);
+    up = true;
+    await p.selfCheckOnce();
+    t += 1;
+    await p.runDue();
+    await p.selfCheckOnce();
+    await p.flushOnce();
+    expect(p.state()).toMatchObject({ networkOk: true, queued: 0 });
+    expect(cloud.calls.filter((c) => c.url.endsWith("/results")).length).toBe(1);
+  });
+
+  it("a self-check that throws counts as failed", async () => {
+    const p = createProber(cfg(), deps, { fetch: mockCloud([]).fetchFn, log: () => {}, selfCheck: async () => { throw new Error("x"); } });
+    await p.selfCheckOnce();
+    expect(p.state().networkOk).toBe(false);
+  });
+
+  it("control probes fail when no control target answers", async () => {
+    // Names resolve privately (refused by the guard); the IP literal is dialled
+    // onto a closed local port (connection refused).
+    const down: ProberDeps = { ...deps, dialTarget: () => ({ ip: "127.0.0.1", family: 4, port: 1 }) };
+    expect(await proberNetworkOk(down)).toBe(false);
+  });
+});
+

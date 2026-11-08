@@ -77,6 +77,28 @@ function dial(deps: ProberDeps, v: Vetted, port: number) {
 
 // ── HTTP ──────────────────────────────────────────────────────────────────
 
+/** Reason for a bot-challenge page; the prober loop does not send these results. */
+export const BOT_CHALLENGE_REASON = "bot_challenge";
+const CHALLENGE_STATUSES = new Set([403, 429, 503]);
+const CHALLENGE_BODY_BYTES = 16 * 1024;
+
+// A bot-protection layer answering a datacenter IP with a challenge (or
+// CAPTCHA) page instead of the site. That says nothing about whether the
+// site is up, so it must not read as an outage. Known markers only:
+// Cloudflare, AWS WAF, Vercel and DataDome headers, and Cloudflare's
+// challenge page body when the header is missing.
+async function isBotChallenge(res: Response): Promise<boolean> {
+  if (!CHALLENGE_STATUSES.has(res.status)) return false;
+  const h = res.headers;
+  if ((h.get("cf-mitigated") ?? "").toLowerCase() === "challenge") return true;
+  if (/^(challenge|captcha)$/i.test(h.get("x-amzn-waf-action") ?? "")) return true;
+  if ((h.get("x-vercel-mitigated") ?? "").toLowerCase() === "challenge") return true;
+  if (h.has("x-datadome") && res.status === 403) return true;
+  if (!/cloudflare/i.test(h.get("server") ?? "")) return false;
+  const body = await readCapped(res, CHALLENGE_BODY_BYTES);
+  return /challenge-platform|cf-chl-|<title>Just a moment\.\.\.<\/title>/i.test(body.text);
+}
+
 async function readCapped(res: Response, cap: number): Promise<{ text: string; bytes: number; truncated: boolean }> {
   const reader = res.body?.getReader();
   if (!reader) return { text: "", bytes: 0, truncated: false };
@@ -191,6 +213,16 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
     }
     const elapsed = Date.now() - start;
     if (!res) return noData("http_error");
+
+    // Before the status check: a challenge usually answers 403, which would
+    // otherwise read as the target failing.
+    if (CHALLENGE_STATUSES.has(res.status) && !expected.includes(res.status)) {
+      const challenged = await isBotChallenge(res.clone());
+      if (challenged) {
+        await discard(res);
+        return noData(BOT_CHALLENGE_REASON, { status: res.status });
+      }
+    }
 
     if (!expected.includes(res.status)) {
       await discard(res);

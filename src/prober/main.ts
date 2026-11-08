@@ -19,7 +19,7 @@
 //   PROBER_FLUSH_SECONDS     default 5
 
 import pkg from "../../package.json" with { type: "json" };
-import { buildDeps, createProber, detectIcmp, loadProberConfig } from "./prober.ts";
+import { buildDeps, createProber, detectIcmp, loadProberConfig, proberNetworkOk } from "./prober.ts";
 
 const version = (pkg as { version: string }).version;
 
@@ -35,7 +35,9 @@ async function main(): Promise<void> {
     `[INFO] [prober] Observer managed prober ${version} → ${cfg.cloudUrl}` +
       ` (dns ${cfg.dnsServers.join(",")}, icmp ${icmpEnabled ? "on" : "off"}, concurrency ${cfg.concurrency})`,
   );
-  const prober = createProber(cfg, buildDeps(cfg, icmpEnabled));
+  const deps = buildDeps(cfg, icmpEnabled);
+  // Results are sent only after a network self-check passes (see proberNetworkOk).
+  const prober = createProber(cfg, deps, { selfCheck: () => proberNetworkOk(deps) });
   prober.start();
 
   let stopping = false;
