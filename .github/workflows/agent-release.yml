@@ -152,8 +152,10 @@ jobs:
           body_path: release-notes.md
           # An rc tag is a GitHub pre-release and never becomes releases/latest,
           # which the console's binary snippets and install.sh download.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          # Test the version part only: the "agent-" prefix itself has a hyphen,
+          # so testing github.ref_name marked every release as a pre-release.
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          make_latest: ${{ contains(steps.version.outputs.tag, '-') && 'false' || 'true' }}
           fail_on_unmatched_files: true
           files: |
             dist/observer-agent-linux-x64
