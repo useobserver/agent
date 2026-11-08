@@ -225,6 +225,25 @@ describe("network self-check", () => {
     expect(cloud.calls.filter((c) => c.url.endsWith("/results")).length).toBe(1);
   });
 
+  it("reports its state to the cloud: ok, network_down, refused", async () => {
+    const state = (c: { init?: RequestInit }) => (c.init?.headers as Record<string, string>)["Prober-State"];
+    let up = true;
+    const cloud = mockCloud([check()]);
+    const p = createProber(cfg(), deps, { fetch: cloud.fetchFn, log: () => {}, selfCheck: async () => up });
+    await p.selfCheckOnce();
+    await p.refreshOnce();
+    expect(state(cloud.calls.at(-1)!)).toBe("ok");
+    up = false;
+    await p.selfCheckOnce();
+    await p.refreshOnce();
+    expect(state(cloud.calls.at(-1)!)).toBe("network_down");
+    const wrong = mockCloud([check()], "us-east");
+    const q = createProber(cfg({ expectedLocation: "eu-central" }), deps, { fetch: wrong.fetchFn, log: () => {} });
+    await q.refreshOnce();
+    await q.refreshOnce();
+    expect(state(wrong.calls.at(-1)!)).toBe("refused");
+  });
+
   it("a self-check that throws counts as failed", async () => {
     const p = createProber(cfg(), deps, { fetch: mockCloud([]).fetchFn, log: () => {}, selfCheck: async () => { throw new Error("x"); } });
     await p.selfCheckOnce();

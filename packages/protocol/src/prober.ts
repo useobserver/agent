@@ -17,6 +17,25 @@ export const PROBER_KEY_PREFIX = "obs_prb_";
 export const PROBER_CAPABILITIES_HEADER = "Prober-Capabilities";
 /** Prober software version (agent package version). */
 export const PROBER_VERSION_HEADER = "Prober-Version";
+/**
+ * Prober health as the prober sees it (agent 1.8.2+): "ok", "network_down"
+ * (its network self-check is failing; it is not measuring) or "refused" (it
+ * will not run checks, e.g. its location does not match PROBER_LOCATION).
+ * Absent means ok. The cloud counts a location as live only while one of its
+ * probers reports ok.
+ */
+export const PROBER_STATE_HEADER = "Prober-State";
+export const PROBER_STATES = ["ok", "network_down", "refused"] as const;
+export type ProberState = (typeof PROBER_STATES)[number];
+
+/**
+ * Result reasons that mean "this location could not measure the target, and
+ * that is not the target failing" (agent 1.8.2+). The cloud stores such a
+ * result as evidence but leaves it out of the location verdict, so the
+ * check's other locations decide.
+ */
+export const PROBER_ABSTAIN_REASONS = ["bot_challenge"] as const;
+
 /** Version of the returned check set; send back as If-None-Match for a 304. */
 export const PROBER_CHECKS_VERSION_HEADER = "x-observer-prober-checks-version";
 

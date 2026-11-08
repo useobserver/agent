@@ -16,6 +16,7 @@ import {
   PROBER_KEY_PREFIX,
   PROBER_RESULTS_MAX_BATCH,
   PROBER_RESULTS_PATH,
+  PROBER_STATE_HEADER,
   PROBER_VERSION_HEADER,
   type ProberCheck,
   type ProberChecksResponse,
@@ -176,6 +177,8 @@ export function createProber(
     [PROBER_KEY_HEADER]: cfg.key,
     [PROBER_VERSION_HEADER]: cfg.version,
     [PROBER_CAPABILITIES_HEADER]: deps.icmpEnabled ? "icmp" : "",
+    // The cloud counts this location as live only while a prober says "ok".
+    [PROBER_STATE_HEADER]: refused ? "refused" : networkOk ? "ok" : "network_down",
   });
 
   async function refreshOnce(): Promise<void> {
@@ -294,16 +297,16 @@ export function createProber(
         .then((item) => {
           // Dropped from the set mid-run (deleted / reassigned): discard.
           if (scheduled.get(s.check.id) !== s) return;
-          // A bot-challenge page says nothing about the target, so this
-          // location abstains: no result, and the check's other locations
-          // decide (the cloud ignores a location without a fresh result).
+          // A bot-challenge page says nothing about the target: the result is
+          // sent with reason bot_challenge, which the cloud keeps as evidence
+          // but leaves out of the verdict (PROBER_ABSTAIN_REASONS), so the
+          // check's other locations decide.
           if (item.reason === BOT_CHALLENGE_REASON) {
             const last = challengeLoggedAt.get(s.check.id) ?? -Infinity;
             if (now() - last >= 60 * 60_000) {
               challengeLoggedAt.set(s.check.id, now());
-              log("WARN", `check ${s.check.id} got a bot-challenge page; not reporting it from this location`);
+              log("WARN", `check ${s.check.id} got a bot-challenge page; this location abstains from its verdict`);
             }
-            return;
           }
           enqueue(item);
         })

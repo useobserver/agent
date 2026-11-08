@@ -5,6 +5,7 @@ import { checkResolverAddress, checkTargetHost, classifyIp, validateOutsideInCon
 import { vetHost, parseDnsServers, type ResolveFn } from "../src/prober/guard";
 import { proberDns, proberHttp, proberIcmp, proberTcp, proberTlsCert, type ProberDeps } from "../src/prober/sources";
 import { createProber } from "../src/prober/prober";
+import { PROBER_ABSTAIN_REASONS } from "@observer/protocol";
 
 // Managed-prober SSRF suite. Each blocked class is asserted on its own so a
 // regression names the exact range that reopened.
@@ -252,6 +253,8 @@ beforeAll(async () => {
         .writeHead(403, { server: "cloudflare" })
         .end("<html><head><title>Just a moment...</title></head><script src=/cdn-cgi/challenge-platform/x></script></html>");
     if (u === "/cf-plain-403") return void res.writeHead(403, { server: "cloudflare" }).end("Forbidden");
+    if (u === "/dd-captcha") return void res.writeHead(403, { "x-datadome": "protected" }).end("<script src=https://ct.captcha-delivery.com/c.js></script>");
+    if (u === "/dd-plain-403") return void res.writeHead(403, { "x-datadome": "protected" }).end("Forbidden");
     if (u === "/aws-captcha") return void res.writeHead(429, { "x-amzn-waf-action": "captcha" }).end();
     res.writeHead(404).end();
   });
@@ -376,6 +379,10 @@ describe("proberHttp", () => {
     const r = await proberHttp({ url: "http://public.example.com/aws-captcha" } as never, deps());
     expect(r.reason).toBe("bot_challenge");
   });
+  it("a DataDome captcha page is a challenge; a plain 403 behind DataDome is not", async () => {
+    expect((await proberHttp({ url: "http://public.example.com/dd-captcha" } as never, deps())).reason).toBe("bot_challenge");
+    expect((await proberHttp({ url: "http://public.example.com/dd-plain-403" } as never, deps())).reason).toBe("unexpected_status:403");
+  });
   it("a plain 403 from Cloudflare stays a failed status", async () => {
     const r = await proberHttp({ url: "http://public.example.com/cf-plain-403" } as never, deps());
     expect(r.reason).toBe("unexpected_status:403");
@@ -458,7 +465,7 @@ describe("validateOutsideInConfig (shared cloud + prober policy)", () => {
 });
 
 describe("prober loop and bot challenges", () => {
-  it("does not send a bot-challenge result; other results still go out", async () => {
+  it("sends a bot-challenge result tagged as an abstain reason, and logs it", async () => {
     const mk = (id: string, path: string) => ({
       id,
       source_type: "http",
@@ -485,7 +492,10 @@ describe("prober loop and bot challenges", () => {
     await p.refreshOnce();
     await p.runDue();
     await p.flushOnce();
-    expect(posted.map((r) => (r as { metric_id: string }).metric_id)).toEqual(["00000000-0000-4000-8000-00000000000b"]);
+    const byId = Object.fromEntries(posted.map((r) => [(r as { metric_id: string }).metric_id, r as { reason?: string; status: string }]));
+    expect(Object.keys(byId).sort()).toEqual(["00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"]);
+    expect(byId["00000000-0000-4000-8000-00000000000a"]).toMatchObject({ status: "no_data", reason: "bot_challenge" });
+    expect((PROBER_ABSTAIN_REASONS as readonly string[]).includes("bot_challenge")).toBe(true);
     expect(logs.some((m) => m.includes("bot-challenge"))).toBe(true);
   });
 });

@@ -89,6 +89,7 @@ export type {
   ProberResultItem,
   ProberResultsRequest,
   ProberResultsResponse,
+  ProberState,
 } from "./prober";
 export {
   PROBER_CHECKS_PATH,
@@ -97,6 +98,9 @@ export {
   PROBER_KEY_PREFIX,
   PROBER_CAPABILITIES_HEADER,
   PROBER_VERSION_HEADER,
+  PROBER_STATE_HEADER,
+  PROBER_STATES,
+  PROBER_ABSTAIN_REASONS,
   PROBER_CHECKS_VERSION_HEADER,
   PROBER_RESULTS_MAX_BATCH,
 } from "./prober";

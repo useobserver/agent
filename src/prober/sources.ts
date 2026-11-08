@@ -77,7 +77,7 @@ function dial(deps: ProberDeps, v: Vetted, port: number) {
 
 // ── HTTP ──────────────────────────────────────────────────────────────────
 
-/** Reason for a bot-challenge page; the prober loop does not send these results. */
+/** Reason for a bot-challenge page (one of PROBER_ABSTAIN_REASONS in @observer/protocol). */
 export const BOT_CHALLENGE_REASON = "bot_challenge";
 const CHALLENGE_STATUSES = new Set([403, 429, 503]);
 const CHALLENGE_BODY_BYTES = 16 * 1024;
@@ -85,18 +85,21 @@ const CHALLENGE_BODY_BYTES = 16 * 1024;
 // A bot-protection layer answering a datacenter IP with a challenge (or
 // CAPTCHA) page instead of the site. That says nothing about whether the
 // site is up, so it must not read as an outage. Known markers only:
-// Cloudflare, AWS WAF, Vercel and DataDome headers, and Cloudflare's
-// challenge page body when the header is missing.
+// Cloudflare, AWS WAF and Vercel headers, and the challenge page bodies of
+// Cloudflare (when its header is missing) and DataDome (its header alone is
+// also sent on real origin errors, so it needs the captcha page too).
 async function isBotChallenge(res: Response): Promise<boolean> {
   if (!CHALLENGE_STATUSES.has(res.status)) return false;
   const h = res.headers;
   if ((h.get("cf-mitigated") ?? "").toLowerCase() === "challenge") return true;
   if (/^(challenge|captcha)$/i.test(h.get("x-amzn-waf-action") ?? "")) return true;
   if ((h.get("x-vercel-mitigated") ?? "").toLowerCase() === "challenge") return true;
-  if (h.has("x-datadome") && res.status === 403) return true;
-  if (!/cloudflare/i.test(h.get("server") ?? "")) return false;
+  const datadome = h.has("x-datadome");
+  const cloudflare = /cloudflare/i.test(h.get("server") ?? "");
+  if (!datadome && !cloudflare) return false;
   const body = await readCapped(res, CHALLENGE_BODY_BYTES);
-  return /challenge-platform|cf-chl-|<title>Just a moment\.\.\.<\/title>/i.test(body.text);
+  if (datadome && /captcha-delivery\.com/i.test(body.text)) return true;
+  return cloudflare && /challenge-platform|cf-chl-|<title>Just a moment\.\.\.<\/title>/i.test(body.text);
 }
 
 async function readCapped(res: Response, cap: number): Promise<{ text: string; bytes: number; truncated: boolean }> {
