@@ -39,13 +39,13 @@ prometheus:
     # -- Basic auth user name.
     username: ""
     # -- Secret holding the basic auth password (PROMETHEUS_PASSWORD).
-    passwordSecret: { name: "", key: password }
+    passwordSecret: {name: "", key: password}
   # -- Secret holding a bearer token for Prometheus (PROMETHEUS_BEARER_TOKEN). Not together with basic auth.
-  bearerTokenSecret: { name: "", key: token }
+  bearerTokenSecret: {name: "", key: token}
   # -- Tenant id sent as X-Scope-OrgID, for Mimir, Cortex or Thanos (PROMETHEUS_TENANT_ID).
   tenantId: ""
   # -- Secret holding extra request headers as JSON (PROMETHEUS_HEADERS).
-  headersSecret: { name: "", key: headers }
+  headersSecret: {name: "", key: headers}
 
 # -- Extra env sources, for probe secrets referenced by *_ref fields
 # (connection_string_ref, token_ref, header_refs, ...).
@@ -100,7 +100,7 @@ otlp:
   # -- OTLP/HTTP port.
   port: 4318
   # -- Secret holding the bearer token senders must present (OBSERVER_OTLP_BEARER_TOKEN).
-  tokenSecret: { name: "", key: token }
+  tokenSecret: {name: "", key: token}
   service:
     # -- Service type for the OTLP receiver.
     type: ClusterIP
@@ -133,24 +133,24 @@ commonLabels: {}
 
 # -- Container resources.
 resources:
-  requests: { cpu: 50m, memory: 96Mi }
-  limits: { memory: 256Mi }
+  requests: {cpu: 50m, memory: 96Mi}
+  limits: {memory: 256Mi}
 # -- Pod security context.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
-  seccompProfile: { type: RuntimeDefault }
+  seccompProfile: {type: RuntimeDefault}
 # -- Container security context.
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
-  capabilities: { drop: [ALL] }
+  capabilities: {drop: [ALL]}
 # -- Liveness probe timings. The probe runs the image's own Bun against /healthz.
-livenessProbe: { initialDelaySeconds: 15, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3 }
+livenessProbe: {initialDelaySeconds: 15, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3}
 # -- Readiness probe timings.
-readinessProbe: { initialDelaySeconds: 5, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 3 }
+readinessProbe: {initialDelaySeconds: 5, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 3}
 # -- Seconds the agent gets to flush and stop.
 terminationGracePeriodSeconds: 15
 # -- Pod priority class.
