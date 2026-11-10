@@ -16,7 +16,9 @@
 // per-receiver counter that surfaces on the dashboard heartbeat.
 
 import crypto from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import {
+  cumulativeWindow,
   decodeOtlpHttpJson,
   attributesFingerprint,
   attributesMatch,
@@ -151,20 +153,30 @@ export function createOtlpReceiver(opts: OtlpReceiverOptions): OtlpReceiverHandl
     let s = streams.get(k);
     if (!s) {
       if (streams.size >= opts.maxBufferPoints) {
-        // Bounded stream count too. Drop oldest by Map insertion order
-        // — Map preserves it, and the LRU isn't worth tracking because
-        // the cap protects against label-cardinality explosions, not
-        // hot-path turnover.
+        // Bounded stream count too. The Map is kept in least-recently-
+        // updated order (an update moves its stream to the back), so the
+        // first key is the stream that has gone quietest; a stream still
+        // being pushed is never the one dropped.
         const firstKey = streams.keys().next().value;
         if (firstKey !== undefined) streams.delete(firstKey);
         dataPointsDropped += 1;
       }
       s = { latest_point: null, points_seen: 0 };
-      streams.set(k, s);
+    } else {
+      streams.delete(k);
+    }
+    streams.set(k, s);
+    dataPointsReceived += 1;
+    s.points_seen += 1;
+    const prev = s.latest_point;
+    // A retried or reordered batch can deliver an older point after a
+    // newer one; it must not replace (or become the baseline for) it.
+    if (prev && dp.time_ms < prev.time_ms) return;
+    if (prev && dp.temporality === "cumulative") {
+      const w = cumulativeWindow(prev, dp);
+      if (w) dp.window = w;
     }
     s.latest_point = dp;
-    s.points_seen += 1;
-    dataPointsReceived += 1;
   }
 
   async function handleRequest(req: Request): Promise<Response> {
@@ -200,17 +212,38 @@ export function createOtlpReceiver(opts: OtlpReceiverOptions): OtlpReceiverHandl
       requestsRejectedPayload += 1;
       return new Response("payload_too_large", { status: 413 });
     }
-    let body: string;
+    let raw: Buffer;
     try {
-      body = await req.text();
+      raw = Buffer.from(await req.arrayBuffer());
     } catch {
       requestsRejectedPayload += 1;
       return new Response("body read failed", { status: 400 });
     }
-    // Backstop for chunked/unknown-length requests (Bun reports byte length).
-    if (Buffer.byteLength(body) > maxBodyBytes) {
+    // Backstop for chunked/unknown-length requests.
+    if (raw.byteLength > maxBodyBytes) {
       requestsRejectedPayload += 1;
       return new Response("payload_too_large", { status: 413 });
+    }
+    // OTLP/HTTP senders gzip by default (the OTel Collector, Grafana Alloy);
+    // the spec requires receivers to accept it. The inflated body is held to
+    // the same limit, so a small compressed body can't expand without bound.
+    const encoding = (req.headers.get("content-encoding") ?? "").trim().toLowerCase();
+    let body: string;
+    if (encoding === "gzip") {
+      try {
+        body = gunzipSync(raw, { maxOutputLength: maxBodyBytes }).toString("utf8");
+      } catch (e) {
+        requestsRejectedPayload += 1;
+        const tooLarge = (e as { code?: string })?.code === "ERR_BUFFER_TOO_LARGE" || e instanceof RangeError;
+        return tooLarge
+          ? new Response("payload_too_large", { status: 413 })
+          : new Response("bad request: otlp_invalid_gzip", { status: 400 });
+      }
+    } else if (encoding === "" || encoding === "identity") {
+      body = raw.toString("utf8");
+    } else {
+      requestsRejectedPayload += 1;
+      return new Response(`content-encoding ${encoding} not supported; use gzip or none`, { status: 415 });
     }
     const decoded = decodeOtlpHttpJson(body);
     if (!decoded.ok) {

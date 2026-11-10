@@ -40,6 +40,8 @@ describe("normaliseNetCode", () => {
     expect(normaliseNetCode("ERR_TLS_HANDSHAKE_TIMEOUT", "x")).toBe("tls_handshake_failed");
     // Bun 1.4 fetch: handshake aborted by the server (e.g. no SNI sent).
     expect(normaliseNetCode("EPROTO", "x")).toBe("tls_handshake_failed");
+    // Bun 1.4: HTTPS_PROXY refused the CONNECT tunnel.
+    expect(normaliseNetCode("ERR_PROXY_TUNNEL", "x")).toBe("proxy_tunnel_failed");
   });
 
   it("returns the fallback for unknown or missing codes", () => {

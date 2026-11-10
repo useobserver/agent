@@ -24,6 +24,32 @@ interface StateProvider {
   getSnapshot(): DashboardSnapshot;
 }
 
+/**
+ * A URL for display: no userinfo (http://user:pass@host), query or
+ * fragment, which can carry credentials. Unparseable input shows as "".
+ */
+export function redactUrl(u: string | null | undefined): string {
+  if (!u) return "";
+  try {
+    const p = new URL(u);
+    p.username = "";
+    p.password = "";
+    p.search = "";
+    p.hash = "";
+    return p.toString();
+  } catch {
+    return "";
+  }
+}
+
+/** Host header of a request to the loopback-bound dashboard: loopback only. */
+export function isLoopbackHostHeader(host: string | null): boolean {
+  if (!host) return false;
+  const h = host.trim().toLowerCase();
+  const name = h.startsWith("[") ? h.slice(0, h.indexOf("]") + 1) : h.replace(/:\d+$/, "");
+  return name === "127.0.0.1" || name === "localhost" || name === "[::1]";
+}
+
 function isLoopbackHost(h: string): boolean {
   return h === "127.0.0.1" || h === "::1" || h === "localhost";
 }
@@ -564,6 +590,12 @@ export function startDashboard(opts: DashboardOptions): DashboardServer {
       // when bound non-loopback.
       if (authRequired && url.pathname !== "/healthz" && !bearerOk(req.headers.get("authorization"), token)) {
         return new Response("Unauthorized", { status: 401 });
+      }
+      // On loopback the dashboard has no token, so a web page that rebinds
+      // its own DNS name to 127.0.0.1 could read it from the operator's
+      // browser. Such a request carries the page's Host; refuse it.
+      if (!authRequired && url.pathname !== "/healthz" && !isLoopbackHostHeader(req.headers.get("host"))) {
+        return new Response("Forbidden", { status: 403 });
       }
       if (url.pathname === "/" || url.pathname === "/index.html") {
         return new Response(HTML, {

@@ -54,7 +54,7 @@ services:
 
     # --- Restricted networks (optional) -----------------------------
     # Proxy + custom-CA support. These are honored by the Bun runtime
-    # (verified on Bun 1.3.6). Prefer setting the proxy vars in .env;
+    # (verified on Bun 1.4.4). Prefer setting the proxy vars in .env;
     # the CA bundle must be mounted into the container. See the
     # "Restricted networks" section of the README.
     # environment:

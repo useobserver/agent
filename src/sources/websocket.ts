@@ -62,7 +62,15 @@ function openProbe(
       resolve(outcome);
     };
 
+    // A frame that doesn't match (a banner, a presence event from a
+    // Socket.IO / Phoenix-style server) is not the reply: keep waiting, and
+    // report a mismatch only if the deadline passes after one was seen.
+    let sawMismatch = false;
     const timer = setTimeout(() => {
+      if (sawMismatch) {
+        finish({ status: "reply_mismatch", handshakeMs: openedAt - start, roundTripMs: Date.now() - sentAt });
+        return;
+      }
       finish({ status: "timeout", handshakeMs: openedAt ? openedAt - start : undefined });
     }, timeoutMs);
 
@@ -76,6 +84,13 @@ function openProbe(
     } catch (e) {
       finish({ status: "open_failed", errorCode: redactSecrets(String((e as Error)?.message ?? ""), secretValues) });
       return;
+    }
+
+    // Binary replies arrive as ArrayBuffer and are matched as UTF-8 text.
+    try {
+      ws.binaryType = "arraybuffer";
+    } catch {
+      /* not settable: binary frames stay unmatched */
     }
 
     ws.addEventListener("open", () => {
@@ -98,9 +113,16 @@ function openProbe(
 
     ws.addEventListener("message", (ev: MessageEvent) => {
       if (pingMode !== "message") return; // ignore unsolicited frames
-      const data = typeof ev.data === "string" ? ev.data : "";
+      const data =
+        typeof ev.data === "string"
+          ? ev.data
+          : ev.data instanceof ArrayBuffer
+            ? new TextDecoder().decode(ev.data)
+            : ArrayBuffer.isView(ev.data)
+              ? new TextDecoder().decode(ev.data as ArrayBufferView)
+              : "";
       if (config.expect_message && !data.includes(config.expect_message)) {
-        finish({ status: "reply_mismatch", handshakeMs: openedAt - start, roundTripMs: Date.now() - sentAt });
+        sawMismatch = true;
         return;
       }
       finish({ status: "round_trip", handshakeMs: openedAt - start, roundTripMs: Date.now() - sentAt });

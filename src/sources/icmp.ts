@@ -109,22 +109,34 @@ function runPing(
     let stderr = "";
     child.stdout?.on("data", (d) => (stdout += d.toString()));
     child.stderr?.on("data", (d) => (stderr += d.toString()));
-    // Hard wall-clock kill: count * per-ping timeout + 2s slack.
-    const wall = count * timeoutMs + 2_000;
+    // Hard wall-clock limit. ping sends one packet a second, so the run
+    // lasts (count - 1) s plus the last reply's wait. SIGINT first: ping
+    // prints its summary on SIGINT, and SIGKILL would lose it.
+    const wall = (count - 1) * 1_000 + Math.max(timeoutMs, 1_000) + 2_000;
+    let hardKill: ReturnType<typeof setTimeout> | undefined;
     const killer = setTimeout(() => {
       try {
-        child.kill("SIGKILL");
+        child.kill("SIGINT");
       } catch {
         /* already gone */
       }
+      hardKill = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }, 1_000);
     }, wall);
     child.on("error", (e) => {
       clearTimeout(killer);
+      if (hardKill) clearTimeout(hardKill);
       const msg = (e as NodeJS.ErrnoException).code === "ENOENT" ? "not found" : e.message;
       resolve({ stdout, stderr: stderr + msg, code: 127, spawnError: msg });
     });
     child.on("close", (code) => {
       clearTimeout(killer);
+      if (hardKill) clearTimeout(hardKill);
       resolve({ stdout, stderr, code });
     });
   });

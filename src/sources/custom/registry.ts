@@ -30,7 +30,8 @@ export interface CustomProbeContext {
 // `safeParse(value) => { success, error? }` works (a zod schema does).
 // Customers who don't use zod simply omit configSchema.
 export interface CustomConfigValidator {
-  safeParse(value: unknown): { success: boolean; error?: { message?: string } };
+  // `data` (zod returns it) is what run() receives, defaults and coercions applied.
+  safeParse(value: unknown): { success: boolean; data?: unknown; error?: { message?: string } };
 }
 
 export interface CustomProbe {

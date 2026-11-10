@@ -9,7 +9,9 @@ import { parsePromInstantResult } from "./_prom-result.ts";
 
 function classifyHttpStatus(status: number): string {
   if (status === 401 || status === 403) return "Unauthorized";
-  if (status === 400) return "BadQuery";
+  // 422 is Prometheus' "the query could not be executed" (e.g. too many
+  // samples, a bad range); 400 is a parse error. Both are the query's fault.
+  if (status === 400 || status === 422) return "BadQuery";
   if (status >= 500 && status < 600) return "PromUpstream";
   return `unexpected_status:${status}`;
 }

@@ -60,6 +60,19 @@ export interface OtlpDataPoint {
     positive: { offset: number; bucket_counts: number[] };
     negative: { offset: number; bucket_counts: number[] };
   };
+  // Histograms only. OTLP aggregationTemporality: cumulative points
+  // (the OTel SDK default, and what Grafana Alloy forwards) carry every
+  // observation since start_time_ms. The receiver sets `window` to the
+  // difference from the stream's previous point, so count / sum / mean /
+  // quantiles describe the last push interval instead of the sender's
+  // whole lifetime. No window (first point, or a reset) reads the point
+  // as-is: everything since the sender started.
+  temporality?: "delta" | "cumulative";
+  start_time_ms?: number;
+  window?: {
+    histogram?: OtlpDataPoint["histogram"];
+    exponential_histogram?: OtlpDataPoint["exponential_histogram"];
+  };
 }
 
 export interface DecodeResult {
@@ -193,8 +206,10 @@ function extractDataPoints(
 ): OtlpDataPoint[] {
   const gauge = metric.gauge as { dataPoints?: Array<Record<string, unknown>> } | undefined;
   const sum = metric.sum as { dataPoints?: Array<Record<string, unknown>> } | undefined;
-  const hist = metric.histogram as { dataPoints?: Array<Record<string, unknown>> } | undefined;
-  const expHist = metric.exponentialHistogram as { dataPoints?: Array<Record<string, unknown>> } | undefined;
+  const hist = metric.histogram as { dataPoints?: Array<Record<string, unknown>>; aggregationTemporality?: unknown } | undefined;
+  const expHist = metric.exponentialHistogram as
+    | { dataPoints?: Array<Record<string, unknown>>; aggregationTemporality?: unknown }
+    | undefined;
 
   const out: OtlpDataPoint[] = [];
 
@@ -233,6 +248,7 @@ function extractDataPoints(
       attributes: { ...outerAttrs, ...readAttributes(dp.attributes as Array<{ key?: string; value?: AnyValue }>) },
       time_ms: readTimeMs(dp.timeUnixNano),
       kind: "histogram",
+      ...temporalityOf(hist?.aggregationTemporality, dp.startTimeUnixNano),
       histogram: {
         count,
         sum: sumVal,
@@ -256,6 +272,7 @@ function extractDataPoints(
       attributes: { ...outerAttrs, ...readAttributes(dp.attributes as Array<{ key?: string; value?: AnyValue }>) },
       time_ms: readTimeMs(dp.timeUnixNano),
       kind: "exponential_histogram",
+      ...temporalityOf(expHist?.aggregationTemporality, dp.startTimeUnixNano),
       exponential_histogram: {
         count,
         sum: sumVal,
@@ -269,6 +286,72 @@ function extractDataPoints(
   }
 
   return out;
+}
+
+// OTLP AggregationTemporality: 1 = DELTA, 2 = CUMULATIVE. The JSON encoding
+// may carry the enum as its number or its name.
+function temporalityOf(raw: unknown, startNano: unknown): Pick<OtlpDataPoint, "temporality" | "start_time_ms"> {
+  const t =
+    raw === 2 || raw === "2" || raw === "AGGREGATION_TEMPORALITY_CUMULATIVE"
+      ? "cumulative"
+      : raw === 1 || raw === "1" || raw === "AGGREGATION_TEMPORALITY_DELTA"
+        ? "delta"
+        : undefined;
+  if (!t) return {};
+  const hasStart = (typeof startNano === "string" && startNano.length > 0) || typeof startNano === "number";
+  return hasStart ? { temporality: t, start_time_ms: readTimeMs(startNano) } : { temporality: t };
+}
+
+/**
+ * Difference between two cumulative points of one stream, or null when
+ * `prev` is no baseline for `cur`: a different start time or a count that
+ * went down is a reset (the sender restarted), and exponential histograms
+ * with different scales can't be subtracted bucket by bucket.
+ */
+export function cumulativeWindow(prev: OtlpDataPoint, cur: OtlpDataPoint): OtlpDataPoint["window"] | null {
+  if (prev.kind !== cur.kind || cur.temporality !== "cumulative" || prev.temporality !== "cumulative") return null;
+  if (prev.start_time_ms !== cur.start_time_ms) return null;
+  if (cur.kind === "histogram" && prev.histogram && cur.histogram) {
+    const a = prev.histogram;
+    const b = cur.histogram;
+    if (b.count < a.count) return null;
+    if (a.bucket_counts.length !== b.bucket_counts.length) return null;
+    if (a.explicit_bounds.some((x, i) => x !== b.explicit_bounds[i])) return null;
+    const buckets = b.bucket_counts.map((c, i) => c - (a.bucket_counts[i] ?? 0));
+    if (buckets.some((c) => c < 0)) return null;
+    return { histogram: { count: b.count - a.count, sum: b.sum - a.sum, bucket_counts: buckets, explicit_bounds: b.explicit_bounds } };
+  }
+  if (cur.kind === "exponential_histogram" && prev.exponential_histogram && cur.exponential_histogram) {
+    const a = prev.exponential_histogram;
+    const b = cur.exponential_histogram;
+    if (b.count < a.count || a.scale !== b.scale) return null;
+    const diff = (pa: { offset: number; bucket_counts: number[] }, pb: { offset: number; bucket_counts: number[] }) => {
+      const prevAt = (abs: number) => pa.bucket_counts[abs - pa.offset] ?? 0;
+      const out = pb.bucket_counts.map((c, i) => c - prevAt(pb.offset + i));
+      // A bucket the previous point had outside this point's range would be lost.
+      for (let i = 0; i < pa.bucket_counts.length; i++) {
+        const abs = pa.offset + i;
+        if ((pa.bucket_counts[i] ?? 0) > 0 && (abs < pb.offset || abs >= pb.offset + pb.bucket_counts.length)) return null;
+      }
+      return out.some((c) => c < 0) ? null : { offset: pb.offset, bucket_counts: out };
+    };
+    const positive = diff(a.positive, b.positive);
+    const negative = diff(a.negative, b.negative);
+    const zero = b.zero_count - a.zero_count;
+    if (!positive || !negative || zero < 0) return null;
+    return {
+      exponential_histogram: {
+        count: b.count - a.count,
+        sum: b.sum - a.sum,
+        scale: b.scale,
+        zero_count: zero,
+        zero_threshold: b.zero_threshold,
+        positive,
+        negative,
+      },
+    };
+  }
+  return null;
 }
 
 function readCountField(raw: unknown): number | undefined {
@@ -315,12 +398,13 @@ function readExpBuckets(raw: unknown): { offset: number; bucket_counts: number[]
  */
 export function aggregateDataPoint(dp: OtlpDataPoint, mode: OtlpAggregation): number | null {
   if (dp.kind === "gauge" || dp.kind === "sum") {
-    // For scalars, only `latest` and `sum` make sense; everything else
-    // collapses to the scalar value itself.
+    // A scalar has no distribution: count and quantiles don't exist.
+    // latest / sum / mean all read the value itself.
+    if (mode === "count" || mode === "p50" || mode === "p95" || mode === "p99") return null;
     return dp.value ?? null;
   }
   if (dp.kind === "histogram") {
-    const h = dp.histogram;
+    const h = dp.window?.histogram ?? dp.histogram;
     if (!h) return null;
     if (mode === "count") return h.count;
     if (mode === "sum") return h.sum;
@@ -332,7 +416,7 @@ export function aggregateDataPoint(dp: OtlpDataPoint, mode: OtlpAggregation): nu
     return null;
   }
   if (dp.kind === "exponential_histogram") {
-    const e = dp.exponential_histogram;
+    const e = dp.window?.exponential_histogram ?? dp.exponential_histogram;
     if (!e) return null;
     if (mode === "count") return e.count;
     if (mode === "sum") return e.sum;

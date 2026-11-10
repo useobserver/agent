@@ -254,7 +254,7 @@ host and never sent to the cloud.
 
 The agent makes the proxy, NO_PROXY, and CA-bundle environment variables
 of the Bun runtime work for you. The behavior below was verified against
-**Bun 1.3.6** (the version this image and binary are built on) by running
+**Bun 1.4.4** (the version this image and binary are built on) by running
 the agent behind a local proxy, including the compiled binary.
 
 ### Egress requirements
@@ -295,19 +295,21 @@ bypass the proxy and are reached directly:
 export NO_PROXY="prometheus.internal,.corp.local,10.20.30.40"
 ```
 
-Verified `NO_PROXY` matching semantics on Bun 1.3.6:
+Verified `NO_PROXY` matching semantics on Bun 1.4.4:
 
 | Form                        | Example               | Matches                         |
 | --------------------------- | --------------------- | ------------------------------- |
 | Exact host                  | `prometheus.internal` | that host                       |
-| Domain suffix (leading dot) | `.corp.local`         | `*.corp.local`                  |
-| Bare suffix                 | `corp.local`          | any host ending in `corp.local` |
+| Domain suffix (leading dot) | `.corp.local`         | `corp.local` and `*.corp.local` |
+| Bare suffix                 | `corp.local`          | `corp.local` and `*.corp.local` |
 | Exact IP                    | `10.20.30.40`         | that address                    |
+| CIDR range                  | `10.0.0.0/8`          | any address in the range        |
 | Match-all                   | `*`                   | every host (disables the proxy) |
 
-**Not supported** (verified to NOT match): **CIDR ranges**
-(`10.0.0.0/8`) and mid-string globs (`host.*`). List internal targets by
-hostname, domain suffix, or exact IP instead of a subnet.
+**Not supported** (verified to NOT match): mid-string globs (`host.*`).
+A suffix matches only at a dot: `corp.local` does not match `xcorp.local`.
+Agents before 1.8.3 (Bun 1.3.6) did not match CIDR ranges, and matched a
+bare suffix anywhere in the name.
 
 Source types unaffected by an HTTP proxy because they do not use HTTP:
 `tcp`, `dns`, `icmp` (these connect directly regardless of the proxy

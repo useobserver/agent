@@ -37,9 +37,10 @@ function makeKey(bits = 2048): string {
 // by injecting a future clock into loadMtlsMaterial rather than
 // backdating the cert (LibreSSL can't backdate). The loader parses
 // the cert for expiry but never cross-checks cert↔key, so a
-// freshly-generated key pairs fine with any minted cert for these
-// unit tests; the TLS handshake (out of scope here) is what actually
-// validates the pair.
+// freshly-generated key pairs fine with any minted cert for the error
+// unit tests where the loader fails before its cert↔key check. Happy paths
+// use the minted cert's own key (lastMintedKey); a mismatched pair is
+// mtls_key_mismatch.
 
 let tmp: string | null = null;
 afterEach(() => {
@@ -135,7 +136,7 @@ describe("loadMtlsMaterial — error paths", () => {
 describe("loadMtlsMaterial — happy path", () => {
   it("loads cert + key + computes expiry", () => {
     process.env.T_CERT = makeSelfSignedCertPem(3650);
-    process.env.T_KEY = makeKey();
+    process.env.T_KEY = lastMintedKey;
     const r = loadMtlsMaterial({ client_cert_ref: "T_CERT", client_key_ref: "T_KEY" });
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -150,7 +151,7 @@ describe("loadMtlsMaterial — happy path", () => {
     // Mint a 3650-day cert, then advance the clock to within 10 days
     // of its notAfter so the warning window trips deterministically.
     process.env.T_CERT = makeSelfSignedCertPem(3650);
-    process.env.T_KEY = makeKey();
+    process.env.T_KEY = lastMintedKey;
     const tenDaysBeforeExpiry = Date.now() + (3650 - 10) * 86_400_000;
     const r = loadMtlsMaterial(
       { client_cert_ref: "T_CERT", client_key_ref: "T_KEY" },
@@ -169,15 +170,16 @@ describe("loadMtlsMaterial — happy path", () => {
     const certPath = join(tmp, "cert.pem");
     writeFileSync(certPath, makeSelfSignedCertPem(3650));
     process.env.T_CERT = certPath;
-    process.env.T_KEY = makeKey();
+    process.env.T_KEY = lastMintedKey;
     const r = loadMtlsMaterial({ client_cert_ref: "T_CERT", client_key_ref: "T_KEY" });
     expect(r.ok).toBe(true);
   });
 
   it("loads optional CA cert", () => {
     process.env.T_CERT = makeSelfSignedCertPem(3650);
-    process.env.T_KEY = makeKey();
+    const key = lastMintedKey;
     process.env.T_CA = makeSelfSignedCertPem(3650);
+    process.env.T_KEY = key;
     const r = loadMtlsMaterial({
       client_cert_ref: "T_CERT",
       client_key_ref: "T_KEY",
@@ -185,6 +187,14 @@ describe("loadMtlsMaterial — happy path", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.material.ca).toContain("BEGIN CERTIFICATE");
+  });
+
+  it("mtls_key_mismatch when the key is not the certificate's", () => {
+    process.env.T_CERT = makeSelfSignedCertPem(3650);
+    process.env.T_KEY = makeKey();
+    const r = loadMtlsMaterial({ client_cert_ref: "T_CERT", client_key_ref: "T_KEY" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("mtls_key_mismatch");
   });
 });
 
@@ -194,6 +204,9 @@ describe("loadMtlsMaterial — happy path", () => {
 // builder. We generate one via the bundled `openssl` if present;
 // otherwise skip the cert-bearing tests. This keeps the suite
 // hermetic on machines with openssl (CI images have it).
+// The key of the cert minted last: the loader checks that the client key is
+// the certificate's key (audit 2026-11-10).
+let lastMintedKey = "";
 function makeSelfSignedCertPem(days: number): string {
   const { execSync } = require("node:child_process") as typeof import("node:child_process");
   const dir = mkdtempSync(join(tmpdir(), "mtls-mint-"));
@@ -204,6 +217,7 @@ function makeSelfSignedCertPem(days: number): string {
   );
   const { readFileSync } = require("node:fs") as typeof import("node:fs");
   const pem = readFileSync(certPath, "utf8");
+  lastMintedKey = readFileSync(keyPath, "utf8");
   rmSync(dir, { recursive: true, force: true });
   new X509Certificate(pem); // sanity: parseable
   return pem;

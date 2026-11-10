@@ -17,7 +17,7 @@
 //   * Client-cert expiry is surfaced as a warning (probe still runs
 //     until the cert actually fails the handshake).
 
-import { X509Certificate } from "node:crypto";
+import { X509Certificate, createPrivateKey, createPublicKey } from "node:crypto";
 import { readSecretValue } from "./_secret-value.ts";
 
 export interface MtlsRefs {
@@ -47,7 +47,8 @@ export type MtlsReason =
   | "mtls_key_parse_failed"
   | "mtls_weak_key"
   | "mtls_cert_expired"
-  | "mtls_incomplete"; // cert without key or vice versa
+  | "mtls_incomplete" // cert without key or vice versa
+  | "mtls_key_mismatch"; // the key is not the certificate's key
 
 const PEM_MARKER = "-----BEGIN";
 const CERT_EXPIRY_WARN_DAYS = 30;
@@ -73,6 +74,21 @@ export function loadPemRef(refName: string, env: NodeJS.ProcessEnv): { ok: true;
  * validate without the password, but we can reject obvious garbage
  * and detect weak RSA moduli. Returns null on success or a reason.
  */
+function keyMatchesCert(certPem: string, keyPem: string): boolean {
+  let keyPub: string;
+  try {
+    keyPub = createPublicKey(createPrivateKey(keyPem)).export({ type: "spki", format: "pem" }).toString();
+  } catch {
+    return true; // encrypted or unreadable here: let the handshake decide
+  }
+  try {
+    const certPub = new X509Certificate(certPem).publicKey.export({ type: "spki", format: "pem" }).toString();
+    return certPub === keyPub;
+  } catch {
+    return true;
+  }
+}
+
 function inspectKey(pem: string): { weak: boolean } | { reason: MtlsReason } {
   if (!/-----BEGIN (RSA |EC |ENCRYPTED |)PRIVATE KEY-----/.test(pem)) {
     return { reason: "mtls_key_parse_failed" };
@@ -151,6 +167,12 @@ export function loadMtlsMaterial(
   }
   if (keyInspection.weak) {
     return { ok: false, reason: "mtls_weak_key", detail: `RSA key under ${MIN_RSA_BITS} bits` };
+  }
+  // A key that isn't the certificate's surfaced only as a generic connect
+  // failure under Bun. Compare public keys; an encrypted key we can't open
+  // here is left to the handshake.
+  if (!keyMatchesCert(certRes.pem, keyRes.pem)) {
+    return { ok: false, reason: "mtls_key_mismatch", detail: refs.client_key_ref };
   }
 
   let ca: string | undefined;

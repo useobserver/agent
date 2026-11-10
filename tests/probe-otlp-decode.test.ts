@@ -277,9 +277,11 @@ describe("aggregateDataPoint", () => {
     expect(aggregateDataPoint(gauge, "latest")).toBe(42);
   });
 
-  it("ignores non-latest aggregations on gauges (returns the scalar)", () => {
-    expect(aggregateDataPoint(gauge, "p95")).toBe(42);
-    expect(aggregateDataPoint(gauge, "count")).toBe(42);
+  it("has no count or quantile for a gauge (no distribution); sum / mean read the scalar", () => {
+    expect(aggregateDataPoint(gauge, "p95")).toBeNull();
+    expect(aggregateDataPoint(gauge, "count")).toBeNull();
+    expect(aggregateDataPoint(gauge, "sum")).toBe(42);
+    expect(aggregateDataPoint(gauge, "mean")).toBe(42);
   });
 
   it("histogram count returns the count", () => {

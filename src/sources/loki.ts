@@ -72,6 +72,15 @@ function lokiErrorText(body: string): string {
   }
 }
 
+/**
+ * The instant-query URL for a Loki base URL. A base that already ends in
+ * /loki (a common copy of the API prefix) is not doubled into /loki/loki.
+ */
+export function lokiQueryUrl(baseUrl: string): string {
+  const base = baseUrl.replace(/\/+$/, "").replace(/\/loki$/, "");
+  return `${base}/loki/api/v1/query`;
+}
+
 export async function execute(config: LokiConfig, _env: AgentEnv = {}): Promise<ProbeResult> {
   const ts = (): string => new Date().toISOString();
 
@@ -86,7 +95,7 @@ export async function execute(config: LokiConfig, _env: AgentEnv = {}): Promise<
     };
   }
 
-  const queryUrl = new URL(`${config.base_url.replace(/\/$/, "")}/loki/api/v1/query`);
+  const queryUrl = new URL(lokiQueryUrl(config.base_url));
   queryUrl.searchParams.set("query", config.query);
 
   const controller = new AbortController();

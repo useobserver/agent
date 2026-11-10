@@ -10,7 +10,7 @@ metadata:
 spec:
   containers:
     - name: mock-cloud
-      image: oven/bun:1.3.6-alpine
+      image: oven/bun:1.4.4-alpine
       command: ["bun", "/mock/server.ts"]
       env:
         - name: PORT

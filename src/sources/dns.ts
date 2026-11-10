@@ -16,7 +16,9 @@ function flattenRecords(records: unknown): string[] {
   if (!Array.isArray(records)) return [String(records)];
   return records.flatMap((r) => {
     if (typeof r === "string") return [r];
-    if (Array.isArray(r)) return r.map(String);
+    // A TXT record longer than 255 bytes arrives as several strings; they
+    // are one value (RFC 7208 joins them), so match against the join.
+    if (Array.isArray(r)) return [r.map(String).join("")];
     if (r && typeof r === "object") {
       const obj = r as { exchange?: string };
       if (obj.exchange) return [obj.exchange];
@@ -39,7 +41,9 @@ export async function execute(config: DnsConfig): Promise<ProbeResult> {
   // the operator gets a typed reason instead of a dispatcher backstop.
   let resolver: dnsModule.promises.Resolver;
   try {
-    resolver = new dnsModule.promises.Resolver({ timeout: timeoutMs, tries: 2 });
+    // tries: 1. With 2, c-ares backs off and retries, so a blackholed
+    // resolver took about 3x timeout_ms. The race below is the hard cap.
+    resolver = new dnsModule.promises.Resolver({ timeout: timeoutMs, tries: 1 });
     if (config.resolver) resolver.setServers([config.resolver]);
   } catch {
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: "dns_resolver_invalid" };
@@ -47,11 +51,29 @@ export async function execute(config: DnsConfig): Promise<ProbeResult> {
 
   const start = Date.now();
   try {
-    const records = await resolver.resolve(config.domain, recordType);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const records = await Promise.race([
+      resolver.resolve(config.domain, recordType),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => {
+          try {
+            resolver.cancel();
+          } catch {
+            /* nothing in flight */
+          }
+          reject(Object.assign(new Error("dns timeout"), { code: "ETIMEOUT" }));
+        }, timeoutMs + 250);
+      }),
+    ]).finally(() => clearTimeout(deadline));
     const elapsed = Date.now() - start;
     if (config.expected_value) {
       const flat = flattenRecords(records);
-      const matched = flat.some((v) => v.includes(config.expected_value!));
+      // Bun returns each string of a split TXT record (long SPF / DKIM) as
+      // a separate record, so for TXT also match against the strings joined
+      // in order.
+      const matched =
+        flat.some((v) => v.includes(config.expected_value!)) ||
+        (recordType === "TXT" && flat.join("").includes(config.expected_value!));
       if (!matched) {
         return {
           value: null,

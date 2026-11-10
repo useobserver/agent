@@ -175,7 +175,9 @@ describe("execute — round_trip_latency", () => {
       ping_mode: "message",
       send_message: "ping",
       expect_message: "NOPE",
-      timeout_ms: 5000,
+      // A non-matching reply is reported at the timeout (other frames may
+      // come first), so keep it under the test runner's 5s limit.
+      timeout_ms: 400,
     });
     expect(r.status_hint).toBe("no_data");
     expect(r.reason).toBe("ws_reply_mismatch");

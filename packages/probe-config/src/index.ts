@@ -115,6 +115,7 @@ export {
   REDIS_ALLOWED_COMMANDS,
   type DatabaseKind,
   type QueryCheckResult,
+  type SqlDialect,
   type RedisCheckResult,
   type MongoCheckResult,
   type MongoOp,

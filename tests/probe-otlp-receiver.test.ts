@@ -1,6 +1,7 @@
 // receiver integration tests.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { gzipSync } from "node:zlib";
 import { createOtlpReceiver } from "../src/sources/otlp/receiver.ts";
 
 // Pick an ephemeral port range so parallel runs don't collide. Bun's
@@ -216,6 +217,54 @@ describe("OTLP receiver body size cap (DoS guard)", () => {
   it("still accepts a normally-sized body under the cap", async () => {
     const r = await pushMetrics(addr, sampleGauge("queue.depth", 7));
     expect(r.status).toBe(200);
+  });
+});
+
+// The OTel Collector and Grafana Alloy gzip OTLP/HTTP bodies by default.
+describe("OTLP receiver content-encoding", () => {
+  const gz = (body: unknown) => gzipSync(Buffer.from(JSON.stringify(body)));
+  async function pushRaw(body: Uint8Array | string, encoding: string): Promise<Response> {
+    return await fetch(`http://${addr}/v1/metrics`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": encoding },
+      body,
+    });
+  }
+
+  it("accepts a gzip body", async () => {
+    const r = await pushRaw(gz(sampleGauge("queue.depth", 9)), "gzip");
+    expect(r.status).toBe(200);
+    expect(receiver!.stats().data_points_received).toBe(1);
+  });
+
+  it("400s on a body that says gzip but isn't", async () => {
+    const r = await pushRaw(JSON.stringify(sampleGauge()), "gzip");
+    expect(r.status).toBe(400);
+    expect(await r.text()).toContain("otlp_invalid_gzip");
+  });
+
+  it("415s on an encoding it can't read", async () => {
+    const r = await pushRaw(JSON.stringify(sampleGauge()), "zstd");
+    expect(r.status).toBe(415);
+  });
+
+  it("413s when the inflated body passes the cap (gzip bomb)", async () => {
+    await receiver!.stop();
+    const prev = process.env.OBSERVER_OTLP_MAX_BODY_BYTES;
+    process.env.OBSERVER_OTLP_MAX_BODY_BYTES = String(1 * 1024 * 1024);
+    receiver = freshReceiver();
+    await receiver.start();
+    addr = receiver.stats().listen_addr!;
+    try {
+      const bomb = gzipSync(Buffer.alloc(8 * 1024 * 1024, 0x20)); // ~8 KiB on the wire, 8 MiB inflated
+      expect(bomb.byteLength).toBeLessThan(1024 * 1024);
+      const r = await pushRaw(bomb, "gzip");
+      expect(r.status).toBe(413);
+      expect(receiver.stats().requests_rejected_payload).toBe(1);
+    } finally {
+      if (prev === undefined) delete process.env.OBSERVER_OTLP_MAX_BODY_BYTES;
+      else process.env.OBSERVER_OTLP_MAX_BODY_BYTES = prev;
+    }
   });
 });
 

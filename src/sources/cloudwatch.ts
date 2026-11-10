@@ -260,25 +260,32 @@ export async function execute(config: CloudwatchConfig): Promise<ProbeResult> {
   }
 }
 
+// The SDK names errors by the JSON protocol's "...Exception" type, unless
+// the response carries x-amzn-query-error, which renames them to the older
+// Query API codes (AccessDenied, Throttling, ...). Accept both spellings,
+// from `name` or `Code`.
+const CLOUDWATCH_ERROR_REASONS: Record<string, string> = {
+  AccessDenied: "cloudwatch_access_denied",
+  UnrecognizedClient: "cloudwatch_access_denied",
+  Throttling: "cloudwatch_throttled",
+  RequestLimitExceeded: "cloudwatch_throttled",
+  InvalidParameterValue: "cloudwatch_invalid_parameter",
+  InvalidParameterCombination: "cloudwatch_invalid_parameter",
+  MissingParameter: "cloudwatch_invalid_parameter",
+  ResourceNotFound: "cloudwatch_resource_not_found",
+  ExpiredToken: "cloudwatch_expired_credentials",
+};
+
 export function classifyCloudwatchError(e: {
   name?: string;
+  Code?: string;
   $metadata?: { httpStatusCode?: number };
 }): string {
-  const name = e?.name ?? "";
-  if (name === "AccessDeniedException" || name === "UnrecognizedClientException") {
-    return "cloudwatch_access_denied";
-  }
-  if (name === "ThrottlingException" || name === "RequestLimitExceeded") {
-    return "cloudwatch_throttled";
-  }
-  if (name === "InvalidParameterValue" || name === "InvalidParameterCombination") {
-    return "cloudwatch_invalid_parameter";
-  }
-  if (name === "ResourceNotFoundException") {
-    return "cloudwatch_resource_not_found";
-  }
-  if (name === "ExpiredToken" || name === "ExpiredTokenException") {
-    return "cloudwatch_expired_credentials";
+  for (const raw of [e?.name, e?.Code]) {
+    if (typeof raw !== "string" || !raw) continue;
+    const base = raw.endsWith("Exception") ? raw.slice(0, -"Exception".length) : raw;
+    const reason = CLOUDWATCH_ERROR_REASONS[base];
+    if (reason) return reason;
   }
   const status = e?.$metadata?.httpStatusCode;
   if (typeof status === "number") {

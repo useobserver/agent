@@ -68,3 +68,30 @@ describe("dashboard /api/state resilience", () => {
     }
   });
 });
+
+// Audit 2026-11-10: the Prometheus URL reached the page with its password,
+// and any Host header was served (readable through DNS rebinding).
+import { redactUrl } from "../src/dashboard";
+
+describe("dashboard redaction and Host check", () => {
+  it("strips userinfo, query and fragment from shown URLs", () => {
+    expect(redactUrl("http://promuser:SuperSecret@prom:9090/sub?token=x#y")).toBe("http://prom:9090/sub");
+    expect(redactUrl("not a url")).toBe("");
+    expect(redactUrl(undefined)).toBe("");
+  });
+
+  it("refuses a non-loopback Host on the loopback dashboard", async () => {
+    const dash = startDashboard({ port: 0, hostname: "127.0.0.1", state: { getSnapshot: () => ({ ok: true }) } });
+    try {
+      const base = `http://127.0.0.1:${dash.port}`;
+      const ok = await fetch(`${base}/api/state`);
+      expect(ok.status).toBe(200);
+      const evil = await fetch(`${base}/api/state`, { headers: { host: `evil.example:${dash.port}` } });
+      expect(evil.status).toBe(403);
+      const local = await fetch(`${base}/api/state`, { headers: { host: `localhost:${dash.port}` } });
+      expect(local.status).toBe(200);
+    } finally {
+      dash.stop();
+    }
+  });
+});

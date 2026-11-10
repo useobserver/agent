@@ -28,6 +28,10 @@ function fakeClock() {
       timers.delete(h as number);
     },
     pending: () => timers.size,
+    /** Step the wall clock without firing timers (NTP correction). */
+    step(ms: number) {
+      t += ms;
+    },
     /** Advance the clock by `ms`, firing due timers in order. */
     async advance(ms: number) {
       const target = t + ms;
@@ -295,5 +299,21 @@ describe("resilience", () => {
     h.refresher.noteRemoteVersion("v9");
     await h.clock.advance(WARMUP_WINDOW_MS);
     expect(h.fetchTimes.length).toBe(1);
+  });
+});
+
+// Audit 2026-11-10: after the clock stepped back 2h, a change signal armed
+// a 2h timer in place of the backstop, so nothing refreshed for 2h.
+describe("clock steps", () => {
+  it("still refreshes soon after the wall clock steps back", async () => {
+    const h = harness({ count: 1, version: "v1" });
+    h.refresher.start();
+    await h.clock.advance(1 * SEC);
+    const before = h.fetchTimes.length;
+    h.clock.step(-2 * 60 * MIN);
+    h.refresher.noteRemoteVersion("v2");
+    await h.clock.advance(60 * SEC);
+    expect(h.fetchTimes.length).toBeGreaterThan(before);
+    h.refresher.stop();
   });
 });

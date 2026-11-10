@@ -7,7 +7,7 @@ import { checkSelectOnly } from "./query-check";
 import { checkRedisCommand } from "./redis-check";
 import { checkMongoQuery } from "./mongo-check";
 
-export { checkSelectOnly, type QueryCheckResult } from "./query-check";
+export { checkSelectOnly, type QueryCheckResult, type SqlDialect } from "./query-check";
 export { checkRedisCommand, REDIS_ALLOWED_COMMANDS, type RedisCheckResult } from "./redis-check";
 export { checkMongoQuery, type MongoCheckResult, type MongoOp, type MongoSpec } from "./mongo-check";
 
@@ -22,7 +22,7 @@ export function checkDatabaseQuery(kind: string, query: string): { ok: boolean; 
   switch (kind) {
     case "postgres":
     case "mysql":
-      return checkSelectOnly(query);
+      return checkSelectOnly(query, kind);
     case "redis":
       return checkRedisCommand(query);
     case "mongodb":

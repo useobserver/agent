@@ -47,6 +47,8 @@ export const NET_REASON_CODES = [
   "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
   "ERR_TLS_CERT_ALTNAME_INVALID",
   "tls_handshake_failed",
+  // HTTPS_PROXY refused the CONNECT tunnel (Bun 1.4+; 1.3.6 reported success)
+  "proxy_tunnel_failed",
 ] as const;
 
 export type NetReasonCode = (typeof NET_REASON_CODES)[number];
@@ -90,6 +92,7 @@ const ALIASES: Record<string, NetReasonCode> = {
   // Bun fetch over https: the server aborted the TLS handshake (for example
   // no SNI sent to an SNI-routed host). Measured on Bun 1.4.
   EPROTO: "tls_handshake_failed",
+  ERR_PROXY_TUNNEL: "proxy_tunnel_failed",
 };
 
 // Bun codes that do not say WHY the connection failed. Bun's fetch reports

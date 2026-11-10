@@ -20,9 +20,17 @@ export async function execute(config: TlsCertConfig): Promise<ProbeResult> {
   return await new Promise((resolve) => {
     let settled = false;
     let socket: tls.TLSSocket;
+    // Bun ignores tls.connect's `timeout` option, so a port that accepts TCP
+    // but never answers TLS hung the probe forever. socket.setTimeout below
+    // covers idle sockets; this wall timer is the backstop.
+    const wall = setTimeout(
+      () => finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: "ETIMEDOUT" }),
+      DEFAULT_TIMEOUT_MS + 1_000,
+    );
     const finish = (result: ProbeResult): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(wall);
       try {
         socket?.destroy();
       } catch {
@@ -64,6 +72,7 @@ export async function execute(config: TlsCertConfig): Promise<ProbeResult> {
           });
         }
       );
+      socket.setTimeout(DEFAULT_TIMEOUT_MS);
       socket.once("timeout", () =>
         finish({ value: null, timestamp: ts(), status_hint: "no_data", reason: "ETIMEDOUT" })
       );

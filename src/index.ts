@@ -5,7 +5,7 @@ import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
 import buffer, { createBuffer } from "./buffer.ts";
 import { createDrainController } from "./drain.ts";
-import { startDashboard, maskEnv } from "./dashboard.ts";
+import { startDashboard, maskEnv, redactUrl } from "./dashboard.ts";
 import { getOtlpReceiver } from "./sources/otlp/receiver.ts";
 import sources from "./sources/index.ts";
 import { buildPrometheusHeaders, describePrometheusAuth } from "./sources/prometheus-auth.ts";
@@ -211,7 +211,7 @@ function getSnapshot(): DashboardSnapshot {
       drain_backoff_ms: drainController.currentBackoffMs(),
     },
     cloud: {
-      cloud_server_url: CLOUD_SERVER_URL,
+      cloud_server_url: redactUrl(CLOUD_SERVER_URL),
       last_heartbeat_at: lastHeartbeatAt,
       last_heartbeat_ok: lastHeartbeatOk,
       last_heartbeat_error: lastHeartbeatError,
@@ -220,7 +220,7 @@ function getSnapshot(): DashboardSnapshot {
       last_post_error: lastPostError,
     },
     prometheus: {
-      server_url: PROMETHEUS_SERVER_URL ?? "",
+      server_url: redactUrl(PROMETHEUS_SERVER_URL),
       last_probe_outcome: lastPromProbeOutcome,
       last_probe_at: lastPromProbeAt,
     },

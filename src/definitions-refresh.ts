@@ -130,7 +130,11 @@ export function createDefinitionsRefresher(opts: DefinitionsRefresherOptions): D
   // allows. Never pushes an already-sooner timer later.
   function requestSoon(): void {
     if (stopped || inFlight) return; // completion re-checks needsFetch()
-    const earliest = lastAttemptAt + Math.max(minGapMs, retryDelay());
+    const gap = Math.max(minGapMs, retryDelay());
+    // lastAttemptAt is wall-clock: after the clock steps back it lies in the
+    // future, and the gap measured from it could be hours. Never wait more
+    // than one gap from now.
+    const earliest = Math.min(lastAttemptAt + gap, now() + gap);
     const at = Math.max(now(), earliest);
     if (timerAt !== null && timerAt <= at) return;
     arm(at - now());

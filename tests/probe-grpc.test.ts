@@ -257,3 +257,26 @@ describe("execute — failures never throw", () => {
     expect(r.reason).toBe("grpc_timeout");
   });
 });
+
+// Audit 2026-11-10.
+import { classifyGrpcError } from "../src/sources/grpc.ts";
+
+describe("audit fixes", () => {
+  it("reaches a server on an IPv6 literal host", async () => {
+    const port = await new Promise<number>((resolve, reject) => {
+      const server = new grpc.Server();
+      server.addService(SERVICE_DEF, { check: (_c: unknown, cb: grpc.sendUnaryData<{ status: number }>) => cb(null, { status: 1 }) });
+      server.bindAsync("[::1]:0", grpc.ServerCredentials.createInsecure(), (err, p) => {
+        if (err) return reject(err);
+        servers.push(server);
+        resolve(p);
+      });
+    });
+    const r = await grpcSource.execute(cfg(port, { host: "::1" }) as never);
+    expect(r.reason).toBeUndefined();
+    expect(r.value).toBe(1);
+  });
+  it("reads Bun's ALPN failure on TLS-to-IP as a TLS problem", () => {
+    expect(classifyGrpcError(grpc.status.UNAVAILABLE, "h2 is not supported")).toBe("grpc_tls_failed");
+  });
+});

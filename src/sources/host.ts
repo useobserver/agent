@@ -56,16 +56,34 @@ async function cpuPct(): Promise<number | null> {
     if (dt <= 0) return null;
     return Math.max(0, Math.min(100, (1 - di / dt) * 100));
   }
-  // Fallback: os.cpus() times delta (works on macOS; Windows is coarse).
-  const a = os.cpus();
-  await sleep(200);
-  const c = os.cpus();
+  // Fallback: os.cpus() times delta (macOS; Windows is coarse). Under Bun
+  // on macOS these counters refresh only about once a second, so a short
+  // window usually sees no change (no_data) or one tick (0% or 100%). Wait
+  // past a refresh, and sample again while nothing has moved.
+  let a = os.cpus();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await sleep(NON_LINUX_CPU_WINDOW_MS);
+    const c = os.cpus();
+    const pct = cpuPctFromTimes(a, c);
+    if (pct !== null) return pct;
+    a = c;
+  }
+  return null;
+}
+
+/** Longer than the ~1 s refresh of os.cpus() times on macOS. */
+export const NON_LINUX_CPU_WINDOW_MS = 1_100;
+
+type CpuTimes = { times: { user: number; nice: number; sys: number; idle: number; irq: number } };
+
+/** Busy % between two os.cpus() snapshots; null when no time passed. */
+export function cpuPctFromTimes(a: CpuTimes[], c: CpuTimes[]): number | null {
   if (!a.length || a.length !== c.length) return null;
   let idle = 0;
   let total = 0;
   for (let i = 0; i < c.length; i++) {
-    const ta = a[i].times;
-    const tb = c[i].times;
+    const ta = a[i]!.times;
+    const tb = c[i]!.times;
     idle += tb.idle - ta.idle;
     total +=
       tb.user - ta.user + (tb.nice - ta.nice) + (tb.sys - ta.sys) + (tb.idle - ta.idle) + (tb.irq - ta.irq);

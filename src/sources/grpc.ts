@@ -18,6 +18,7 @@
 // The client is always closed after each probe (no connection leak),
 // and the call carries a deadline so a probe can never hang.
 
+import net from "node:net";
 import * as grpc from "@grpc/grpc-js";
 import type { ProbeResult, ProbeSource } from "../types.ts";
 import { GrpcConfigSchema, type GrpcConfig } from "@observer/probe-config";
@@ -114,9 +115,19 @@ const SERVICE_UNKNOWN = 3;
 // Map a gRPC status code (+ details) to a typed reason. TLS handshake
 // failures arrive as UNAVAILABLE/INTERNAL with a TLS-ish detail string,
 // so sniff the detail first.
-function classifyGrpcError(code: number, details: string): string {
+export function classifyGrpcError(code: number, details: string): string {
   const d = (details || "").toLowerCase();
-  if (d.includes("tls") || d.includes("ssl") || d.includes("certificate") || d.includes("handshake")) {
+  // TLS to a bare IP address fails under Bun: 1.3.6 says "h2 is not
+  // supported" (ALPN, no SNI); 1.4.4 refuses an IP as the TLS server name
+  // ("Setting the TLS ServerName to an IP address is not permitted", caught
+  // by "tls" below). Either way a TLS setup problem, not an unavailable server.
+  if (
+    d.includes("tls") ||
+    d.includes("ssl") ||
+    d.includes("certificate") ||
+    d.includes("handshake") ||
+    d.includes("h2 is not supported")
+  ) {
     return "grpc_tls_failed";
   }
   switch (code) {
@@ -189,7 +200,9 @@ function runCheck(
   metadata: Record<string, string>,
 ): Promise<CheckOutcome> {
   const timeoutMs = config.timeout_ms ?? 5_000;
-  const target = `${config.host}:${config.port}`;
+  // An IPv6 literal needs brackets, or "::1:50051" reads as an address.
+  const host = net.isIP(config.host) === 6 ? `[${config.host}]` : config.host;
+  const target = `${host}:${config.port}`;
   return new Promise<CheckOutcome>((resolve) => {
     // Build call metadata BEFORE creating the client. grpc-js throws on
     // illegal metadata keys/values with a message that embeds the FULL

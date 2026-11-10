@@ -6,7 +6,7 @@
 // word "update" inside a string literal or comment.
 
 import { describe, expect, it } from "bun:test";
-import { checkSelectOnly } from "@observer/probe-config";
+import { checkDatabaseQuery, checkSelectOnly } from "@observer/probe-config";
 
 describe("checkSelectOnly — accepts", () => {
   it("a plain SELECT", () => {
@@ -51,7 +51,10 @@ describe("checkSelectOnly — accepts", () => {
   });
 
   it("a SELECT with a MySQL-style backslash-quote escape", () => {
-    expect(checkSelectOnly("SELECT 'don\\'t' AS msg").ok).toBe(true);
+    expect(checkSelectOnly("SELECT 'don\\'t' AS msg", "mysql").ok).toBe(true);
+    // Postgres reads \' as a backslash and a closing quote, so the same text
+    // leaves an unterminated literal there.
+    expect(checkSelectOnly("SELECT 'don\\'t' AS msg", "postgres").ok).toBe(false);
   });
 
   it("a SELECT whose literal contains a fake closing quote then ; DROP", () => {
@@ -156,6 +159,48 @@ describe("checkSelectOnly — audit bypasses (2026-11)", () => {
   for (const [label, q] of accepted) {
     it(`still accepts ${label}`, () => {
       expect(checkSelectOnly(q).ok).toBe(true);
+    });
+  }
+});
+
+// Each engine's own quoting (audit 2026-11-10): text one engine reads as a
+// literal must not hide live SQL from the check for the other.
+describe("checkDatabaseQuery — engine-aware quoting", () => {
+  const refused: Array<["postgres" | "mysql", string]> = [
+    ["postgres", "SELECT 'a\\', nextval('s'), '\\'"],
+    ["postgres", "SELECT 'x\\' , pg_terminate_backend(pid), '\\' FROM pg_stat_activity"],
+    ["postgres", "SELECT 'a\\'; DELETE FROM t; SELECT '\\'"],
+    ["postgres", "SELECT $$'$$, set_config('x','y',false), $$'$$"],
+    ["postgres", "SELECT $$'$$ INTO newt FROM t WHERE $$'$$ = ''"],
+    ["postgres", 'SELECT "nextval"(\'s\')'],
+    ["postgres", "SELECT pg_notify('c','x')"],
+    ["postgres", "SELECT * FROM t FOR UPDATE"],
+    ["postgres", "WITH x AS (DELETE FROM t RETURNING 1) SELECT count(*) FROM x"],
+    ["postgres", "SELECT 1 /* a /* b */ c"],
+    ["mysql", "SELECT `a'b`, GET_LOCK('x',10), `c'd`"],
+    ["mysql", "SELECT `a'b` FROM t INTO OUTFILE '/tmp/x' -- `'"],
+    ["mysql", "SELECT 1 # '\n, GET_LOCK('x',1) -- '"],
+    ["mysql", "SELECT /*! 1; DROP TABLE t */ 1"],
+    ["mysql", "SELECT * FROM t LOCK IN SHARE MODE"],
+  ];
+  for (const [kind, q] of refused) {
+    it(`refuses ${kind}: ${q}`, () => {
+      expect(checkDatabaseQuery(kind, q).ok).toBe(false);
+      expect(checkSelectOnly(q).ok).toBe(false);
+    });
+  }
+  const accepted: Array<["postgres" | "mysql", string]> = [
+    ["postgres", "SELECT E'a\\'b' AS x"],
+    ["postgres", "SELECT $tag$a 'b' $tag$"],
+    ["postgres", "SELECT a$b FROM t"],
+    ["postgres", "SELECT 'a\\' AS backslash"],
+    ["postgres", 'SELECT "Update" FROM t'],
+    ["mysql", "SELECT `col` FROM t"],
+    ["mysql", "SELECT 1 # trailing comment"],
+  ];
+  for (const [kind, q] of accepted) {
+    it(`accepts ${kind}: ${q}`, () => {
+      expect(checkDatabaseQuery(kind, q).ok).toBe(true);
     });
   }
 });

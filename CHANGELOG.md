@@ -5,6 +5,24 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+## 1.8.3 (2026-11-10)
+
+- The OTLP receiver accepts gzip-compressed requests, the default for the OpenTelemetry Collector and Grafana Alloy. Before, they were rejected with a 400.
+- OTLP histogram quantiles, counts and means cover the time since the previous push instead of everything since the sender started. A late, older point no longer replaces a newer one.
+- The read-only SQL check follows each database's own quoting rules, and also refuses row locks and `pg_notify`.
+- TLS certificate checks time out on a port that never answers TLS instead of hanging.
+- ICMP checks with several packets and a short timeout report results instead of an error.
+- WebSocket checks wait past greeting frames for the expected reply, and match binary replies.
+- DNS checks match TXT records split into several strings, and stop at their timeout.
+- gRPC checks reach IPv6 addresses.
+- Elasticsearch percentiles with no matching documents report no data instead of 0.
+- Host CPU on macOS reports a value instead of mostly no data.
+- Clearer reasons for a rejected or mismatched mTLS client certificate, redirect loops and CloudWatch permission and throttling errors.
+- The local debug dashboard hides credentials in the Prometheus URL and refuses requests for other host names.
+- Built on Bun 1.4.4 (was 1.3.6). HTTPS checks no longer reuse a TLS session from another check with a different client certificate or trust setting.
+- `NO_PROXY` now accepts CIDR ranges (`10.0.0.0/8`), and a suffix matches only at a dot: `corp.local` no longer matches `xcorp.local`.
+- A proxy that refuses the HTTPS tunnel is reported as `proxy_tunnel_failed`; before, the request could appear to succeed.
+
 ## 1.8.2 (2026-11-08)
 
 - Managed probers check their own network every 15 seconds and hold results until a check passes, so a prober that loses its connection no longer reports its targets as down.

@@ -39,7 +39,7 @@ export async function execute(config: CustomConfig, env: AgentEnv = {}): Promise
     };
   }
 
-  const probeConfig = (config.probe_config ?? {}) as Record<string, unknown>;
+  let probeConfig = (config.probe_config ?? {}) as Record<string, unknown>;
   if (probe.configSchema) {
     const parsed = probe.configSchema.safeParse(probeConfig);
     if (!parsed.success) {
@@ -51,6 +51,8 @@ export async function execute(config: CustomConfig, env: AgentEnv = {}): Promise
         metadata: { probe_name: probeName, error: parsed.error?.message ?? "config validation failed" },
       };
     }
+    // run() gets what the schema produced: its defaults and coercions.
+    if (parsed.data !== undefined) probeConfig = parsed.data as Record<string, unknown>;
   }
 
   const timeoutMs = config.timeout_ms ?? DEFAULT_TIMEOUT_MS;

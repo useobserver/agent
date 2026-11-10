@@ -89,6 +89,20 @@ function extractAggValue(
     return Number.isFinite(n) ? { ok: true, value: n } : { ok: false, reason: "es_no_data" };
   }
 
+  // percentiles with `keyed: false`: [{ key: 95, value: 120.5 }, ...].
+  if (Array.isArray(a.values)) {
+    const entries = a.values as Array<{ key?: unknown; value?: unknown }>;
+    const entry = percentile
+      ? entries.find((e) => parseFloat(String(e?.key)) === parseFloat(percentile))
+      : entries.length === 1
+        ? entries[0]
+        : undefined;
+    if (!entry) return { ok: false, reason: "es_agg_unsupported" };
+    if (entry.value === null || entry.value === undefined) return { ok: false, reason: "es_no_data" };
+    const n = Number(entry.value);
+    return Number.isFinite(n) ? { ok: true, value: n } : { ok: false, reason: "es_no_data" };
+  }
+
   if (a.values && typeof a.values === "object") {
     // percentiles: pick the requested key, or the sole key if only one.
     const keys = Object.keys(a.values);
@@ -103,6 +117,9 @@ function extractAggValue(
       else return { ok: false, reason: "es_agg_unsupported" };
     }
     const raw = a.values[key];
+    // No matching documents: ES reports each percentile as null, and
+    // Number(null) is 0, which would read as a healthy 0 ms latency.
+    if (raw === null || raw === undefined) return { ok: false, reason: "es_no_data" };
     const n = Number(raw);
     return Number.isFinite(n) ? { ok: true, value: n } : { ok: false, reason: "es_no_data" };
   }

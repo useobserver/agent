@@ -132,6 +132,7 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
     let currentUrl = config.url;
     let reqHeaders: Record<string, string> = { ...headers };
     let res: Response;
+    let tooManyRedirects = false;
     for (let hop = 0; ; hop++) {
       res = await fetch(currentUrl, {
         method,
@@ -141,9 +142,13 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
         // Bun-specific knob — node-fetch ignores.
         tls: tlsOptions,
       } as RequestInit & { tls?: Record<string, unknown> });
-      if (!followRedirects || res.status < 300 || res.status >= 400 || hop >= MAX_REDIRECTS) break;
+      if (!followRedirects || res.status < 300 || res.status >= 400) break;
       const loc = res.headers.get("location");
       if (!loc) break;
+      if (hop >= MAX_REDIRECTS) {
+        tooManyRedirects = true;
+        break;
+      }
       // We're about to follow — this intermediate response's body is
       // never read. Cancel it so the connection returns to the pool
       // instead of idling until GC.
@@ -157,6 +162,21 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
       currentUrl = next.toString();
     }
     const elapsed = Date.now() - start;
+
+    if (tooManyRedirects && !expected.includes(res.status)) {
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+      return {
+        value: null,
+        timestamp: ts(),
+        status_hint: "no_data",
+        reason: "too_many_redirects",
+        metadata: { status: res.status, max_redirects: MAX_REDIRECTS },
+      };
+    }
 
     if (!expected.includes(res.status)) {
       try {
@@ -312,7 +332,9 @@ export async function execute(config: HttpConfig): Promise<ProbeResult> {
     const rawCode = e?.cause?.code ?? e?.code;
     const code = typeof rawCode === "string" ? rawCode : "";
     if (mtls) {
-      const tlsReason = classifyTlsError(code, e?.message);
+      // Under Bun a server that refuses the client certificate resets the
+      // connection instead of surfacing a TLS alert.
+      const tlsReason = code === "ECONNRESET" ? "mtls_client_cert_rejected" : classifyTlsError(code, e?.message);
       if (tlsReason) {
         return {
           value: null,
