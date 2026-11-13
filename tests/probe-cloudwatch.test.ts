@@ -28,9 +28,19 @@ class FakeGetMetricDataCommand {
   constructor(public readonly input: unknown) {}
 }
 
+class FakeListMetricsCommand {
+  constructor(public readonly input: unknown) {}
+}
+
+// Every name src/sources/cloudwatch.ts imports from the SDK must be here.
+// The mock is process-wide, so a missing one (ListMetricsCommand was) makes
+// the source fail to load, in this file when it runs first and in any later
+// file that imports the sources: test file order varies between machines,
+// and in CI that also took the Postgres probe tests down with it.
 mock.module("@aws-sdk/client-cloudwatch", () => ({
   CloudWatchClient: FakeCloudWatchClient,
   GetMetricDataCommand: FakeGetMetricDataCommand,
+  ListMetricsCommand: FakeListMetricsCommand,
 }));
 
 mock.module("@aws-sdk/credential-providers", () => ({
