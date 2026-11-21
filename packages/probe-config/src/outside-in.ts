@@ -40,6 +40,8 @@ export const OUTSIDE_IN_FORBIDDEN_KEYS = Object.freeze([
 
 /** Per-attempt time cap on a prober (ms). */
 export const OUTSIDE_IN_MAX_TIMEOUT_MS = 10_000;
+/** HTTP methods a hosted (outside-in) check may use: read-only. */
+export const OUTSIDE_IN_HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Response body cap on a prober (bytes); body_match / json_path read at most this. */
 export const OUTSIDE_IN_MAX_BODY_BYTES = 1_048_576;
 /** Redirect hops a prober follows (each hop re-vetted). */
@@ -459,6 +461,22 @@ export function validateOutsideInConfig(sourceType: unknown, config: unknown): O
     };
   }
   const cfg = parsed.data as Record<string, unknown>;
+
+  // Hosted checks only read (2026-11-21, Taha's go). A check that could
+  // POST, PUT, PATCH or DELETE would let a tenant make Observer's addresses
+  // change state on somebody else's server. Writes need the tenant's own
+  // agent, inside their network.
+  if (sourceType === "http") {
+    const method = String(cfg.method ?? "GET").toUpperCase();
+    if (!OUTSIDE_IN_HTTP_METHODS.has(method)) {
+      return {
+        ok: false,
+        code: "method_not_allowed",
+        message: "Hosted checks only read: use GET, HEAD or OPTIONS. Use the in-network agent for other methods.",
+        field: "method",
+      };
+    }
+  }
 
   const timeout = cfg.timeout_ms;
   if (typeof timeout === "number" && timeout > OUTSIDE_IN_MAX_TIMEOUT_MS) {

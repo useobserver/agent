@@ -424,6 +424,18 @@ describe("tcp / tls_cert / icmp / dns use the same guard", () => {
 });
 
 describe("validateOutsideInConfig (shared cloud + prober policy)", () => {
+  it("allows only read-only HTTP methods", () => {
+    for (const m of ["GET", "HEAD", "OPTIONS", undefined]) {
+      expect(validateOutsideInConfig("http", { url: "https://example.com", ...(m ? { method: m } : {}) }).ok).toBe(true);
+    }
+    for (const m of ["POST", "PUT", "PATCH", "DELETE"]) {
+      expect(validateOutsideInConfig("http", { url: "https://example.com", method: m })).toMatchObject({
+        ok: false,
+        code: "method_not_allowed",
+        field: "method",
+      });
+    }
+  });
   it("allows the five public-safe types", () => {
     expect(validateOutsideInConfig("http", { url: "https://example.com" }).ok).toBe(true);
     expect(validateOutsideInConfig("tcp", { host: "example.com", port: 443 }).ok).toBe(true);
