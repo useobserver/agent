@@ -143,9 +143,10 @@ export async function runQuery(
     // network partition after connect leaves the promise hanging. Race
     // against statementTimeoutMs + slack; on loss, detach the abandoned
     // query promise so its eventual rejection can't go unhandled.
-    // `simple` is honoured by postgres.js 3.4.x (src/index.js unsafe()) but
-    // missing from its UnsafeQueryOptions typings.
-    const extendedProtocol = { simple: false } as unknown as Parameters<typeof sql.unsafe>[2];
+    // `simple` is honoured by postgres.js unsafe(query, args, options) in 3.4.x
+    // and 4.x (typed in 4.x); tests/database-postgres-live checks it still
+    // refuses "SELECT 1; COMMIT; ..." on every driver upgrade.
+    const extendedProtocol = { simple: false } as const;
     const queryPromise = sql.begin("read only", (tx) =>
       tx.unsafe(query, [], extendedProtocol),
     ) as unknown as Promise<Array<Record<string, unknown>>>;

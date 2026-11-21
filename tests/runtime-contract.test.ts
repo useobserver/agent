@@ -14,6 +14,9 @@ const SRC = join(import.meta.dir, "..", "src");
 // config, resolved on the agent host). Add a file here only when it reads
 // customer-named refs, never for a fixed var name.
 const AUDITED_DYNAMIC_READS = new Set([
+  // Refuses to start when any proxy variable is set (PROXY_VARS); reads
+  // nothing else by a computed name.
+  "prober/main.ts",
   "sources/_header-refs.ts",
   // The single gate every cloud-named ref goes through (agent-internal
   // secrets refused, optional OBSERVER_PROBE_SECRET_REFS allowlist).

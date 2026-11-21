@@ -4,9 +4,9 @@ description: Observer Agent. Runs your checks inside your network and sends the 
 type: application
 # Chart version: independent semver. Bump the patch version with every agent
 # release (together with appVersion) and on chart-only fixes.
-version: 0.1.4
+version: 0.1.5
 # The agent version (apps/agent/package.json). tests/chart-version.test.ts enforces it.
-appVersion: "1.8.3"
+appVersion: "1.8.4"
 kubeVersion: ">=1.29.0-0"
 home: https://use.observer
 sources:
@@ -29,8 +29,8 @@ annotations:
       url: https://github.com/useobserver/agent
   artifacthub.io/changes: |
     - kind: changed
-      description: Observer Agent 1.8.3 on Bun 1.4.4, gzip OTLP and probe fixes
+      description: Observer Agent 1.8.4 on Bun 1.4.5, DNS resolver memory fix, TCP timeout fix and newer database drivers
   artifacthub.io/images: |
     - name: agent
-      image: ghcr.io/useobserver/agent:1.8.3
+      image: ghcr.io/useobserver/agent:1.8.4
   artifacthub.io/containsSecurityUpdates: "false"

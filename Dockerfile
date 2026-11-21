@@ -3,7 +3,7 @@
 # Layout: src/ holds the agent, packages/* hold its shared
 # protocol/config libraries. The COPY lines below follow that shape.
 
-FROM oven/bun:1.4.4-alpine AS builder
+FROM oven/bun:1.4.5-alpine@sha256:da816670775f4c2b4e990b6b1847cf5540dcdc721a42033dd331ce7a88ba6a3b AS builder
 WORKDIR /repo
 
 # No committed lockfile; bun generates one during install. Dependency
@@ -30,7 +30,7 @@ COPY build-info.jso[n] ./
 # this ownership on first use.
 RUN mkdir -p /data && chown 65532:0 /data && chmod 0770 /data
 
-FROM oven/bun:1.4.4-distroless
+FROM oven/bun:1.4.5-distroless@sha256:3a210956422ad81cf7532e1fc1f2eb9275d6ef4c2337a9d25d530f798e80726a
 
 WORKDIR /app
 

@@ -1,6 +1,6 @@
 {
   "name": "observer-agent",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "description": "Observer agent: probes metric sources, pushes results to Observer Cloud.",
   "license": "Apache-2.0",
   "main": "src/index.ts",
@@ -17,22 +17,22 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudwatch": "^3.1146.0",
-    "@aws-sdk/client-sts": "^3.1146.0",
-    "@aws-sdk/credential-providers": "^3.1146.0",
+    "@aws-sdk/client-cloudwatch": "^3.1175.0",
+    "@aws-sdk/client-sts": "^3.1175.0",
+    "@aws-sdk/credential-providers": "^3.1175.0",
     "@grpc/grpc-js": "^1.14.5",
     "@observer/probe-config": "workspace:*",
     "@observer/protocol": "workspace:*",
     "ioredis": "^6.0.0",
     "jsonpath-plus": "^11.1.1",
-    "mongodb": "^6.21.0",
+    "mongodb": "^7.9.1",
     "mysql2": "^3.24.5",
-    "postgres": "^3.4.9",
+    "postgres": "^4.1.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@observer/tsconfig": "workspace:*",
-    "@types/bun": "~1.4.4",
+    "@types/bun": "^1.4.5",
     "typescript": "^6.0.3"
   },
   "workspaces": [

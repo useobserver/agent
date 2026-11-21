@@ -103,6 +103,8 @@ export const AGENT_ENV: readonly AgentEnvVar[] = Object.freeze([
   v("PROBER_REFRESH_SECONDS", "30", "prober", { since: "1.7.0" }),
   v("PROBER_FLUSH_SECONDS", "5", "prober", { since: "1.7.0" }),
   v("PROBER_QUEUE_MAX", "20000", "prober", { since: "1.7.0" }),
+  v("PROBER_MAX_RSS_MB", "384", "prober", { since: "1.8.4" }),
+  v("PROBER_HEARTBEAT_FILE", null, "prober", { since: "1.8.4" }),
 
   // Runtime / SDK (not read by agent code)
   v("HTTPS_PROXY", null, "runtime"),
@@ -111,6 +113,8 @@ export const AGENT_ENV: readonly AgentEnvVar[] = Object.freeze([
   v("NODE_EXTRA_CA_CERTS", null, "runtime"),
   v("NODE_TLS_REJECT_UNAUTHORIZED", null, "runtime"),
   v("NODE_ENV", null, "runtime"),
+  // Passed on to the ping child, whose environment is otherwise empty.
+  v("PATH", "/usr/bin:/bin:/usr/sbin:/sbin", "runtime"),
   v("BUN_OPTIONS", null, "runtime"),
   // "0" turns off Bun's on-disk transpiler cache (the Helm chart sets it: the
   // root filesystem is read-only there).

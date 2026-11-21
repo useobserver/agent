@@ -5,6 +5,26 @@ The image tags `1`, `1.x` and `latest` track the newest 1.x release.
 
 ## Unreleased
 
+## 1.8.4 (2026-11-21)
+
+- DNS checks and managed probers reuse their DNS resolvers. Before, every lookup created a new one, and on Bun 1.3.6 each leaked memory: a DNS check every minute grew the agent by about 11 MB a day.
+- Built on Bun 1.4.5 (was 1.4.4). Database checks use the PostgreSQL driver 4 and the MongoDB driver 7. With the MongoDB driver 7, AWS authentication takes its credentials from the environment, not from the connection string.
+- TCP checks stop at their timeout when a connection attempt is never answered, instead of waiting for the operating system's retry limit.
+- The `ping` command no longer inherits the agent's environment, so it never sees the agent key.
+- Managed probers:
+  - Every check, network self-check and call to Observer has a hard time limit, so one request that never finishes can no longer stop a check from running again.
+  - A prober restarts itself when it can no longer measure: memory above `PROBER_MAX_RSS_MB` (default 384), an event loop running more than 30 seconds late, abandoned checks piling up, or no result for 10 minutes.
+  - Probers report their memory, delays, queue and clock skew to Observer, so a degrading prober can be alerted on before it stops.
+  - A result measured while the prober ran late is no longer reported as the target's response time.
+  - Slow result uploads no longer send the same results twice or drop results that were never sent.
+  - Keyword checks find text in responses whose first network chunk is larger than 4 KB.
+  - The network self-check also checks DNS and passes on the first control target that answers.
+  - A failing DNS resolver is reported as `dns_failed`, not as the target having no DNS answer.
+  - Each check uses a fresh connection, and its `User-Agent` cannot be replaced.
+  - Probers refuse to start on Bun older than 1.4.4 or with proxy variables set, and never follow a redirect with their credential.
+  - Scheduling uses a monotonic clock, so a clock step no longer pauses checks.
+  - `PROBER_HEARTBEAT_FILE` names a file the prober touches every 10 seconds, for a Kubernetes liveness probe.
+
 ## 1.8.3 (2026-11-10)
 
 - The OTLP receiver accepts gzip-compressed requests, the default for the OpenTelemetry Collector and Grafana Alloy. Before, they were rejected with a 400.

@@ -29,6 +29,64 @@ export const PROBER_STATES = ["ok", "network_down", "refused"] as const;
 export type ProberState = (typeof PROBER_STATES)[number];
 
 /**
+ * Prober self-report (agent 1.8.4+), sent on every request so the cloud can
+ * export it and Grafana can alert before a prober degrades into silence.
+ * Format: `key=value` pairs joined by "; ", integers only, unknown keys
+ * ignored, absent from older probers:
+ *   rss_mb        resident memory
+ *   lag_ms        worst event-loop delay over the last minute
+ *   queued        results waiting to be sent
+ *   inflight      checks running now
+ *   stuck         checks abandoned at their hard deadline since start
+ *   abandoned     abandoned checks whose work has still not settled
+ *   skipped       results not sent because the process was running late
+ *   dropped       results dropped (queue full) since start
+ *   sched_lag_ms  worst lateness of a check's start over the last minute
+ *   result_age_s  seconds since the last result was produced (-1 = none yet)
+ *   skew_s        prober clock minus the cloud's Date header, in seconds
+ *   uptime_s      seconds since the process started
+ */
+export const PROBER_HEALTH_HEADER = "Prober-Health";
+export const PROBER_HEALTH_KEYS = [
+  "rss_mb",
+  "lag_ms",
+  "queued",
+  "inflight",
+  "stuck",
+  "abandoned",
+  "skipped",
+  "dropped",
+  "sched_lag_ms",
+  "result_age_s",
+  "skew_s",
+  "uptime_s",
+] as const;
+export type ProberHealthKey = (typeof PROBER_HEALTH_KEYS)[number];
+export type ProberHealth = Partial<Record<ProberHealthKey, number>>;
+
+/** Encode a health report for PROBER_HEALTH_HEADER. Non-finite values are left out. */
+export function formatProberHealth(h: ProberHealth): string {
+  return PROBER_HEALTH_KEYS.filter((k) => Number.isFinite(h[k]))
+    .map((k) => `${k}=${Math.round(h[k] as number)}`)
+    .join("; ");
+}
+
+/** Parse PROBER_HEALTH_HEADER leniently: known keys, integers in [-1e6, 1e9], at most 512 chars. */
+export function parseProberHealth(raw: string | null | undefined): ProberHealth | null {
+  if (!raw || raw.length > 512) return null;
+  const out: ProberHealth = {};
+  for (const part of raw.split(";")) {
+    const m = /^\s*([a-z_]{1,32})=(-?\d{1,10})\s*$/.exec(part);
+    if (!m) continue;
+    const key = m[1] as ProberHealthKey;
+    if (!(PROBER_HEALTH_KEYS as readonly string[]).includes(key)) continue;
+    const n = Number(m[2]);
+    if (n >= -1e6 && n <= 1e9) out[key] = n;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
  * Result reasons that mean "this location could not measure the target, and
  * that is not the target failing" (agent 1.8.2+). The cloud stores such a
  * result as evidence but leaves it out of the location verdict, so the

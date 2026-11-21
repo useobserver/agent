@@ -100,6 +100,10 @@ function runPing(
     try {
       child = spawn("ping", buildPingArgs(host, count, timeoutMs), {
         stdio: ["ignore", "pipe", "pipe"],
+        // Only what ping needs: the agent's environment holds credentials
+        // (AGENT_KEY, OBSERVER_PROBER_KEY), and a fixed locale keeps the
+        // output in the English form the parser reads.
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL: "C" },
       });
     } catch (e) {
       resolve({ stdout: "", stderr: (e as Error).message, code: 127, spawnError: (e as Error).message });

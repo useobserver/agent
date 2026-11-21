@@ -90,6 +90,8 @@ export type {
   ProberResultsRequest,
   ProberResultsResponse,
   ProberState,
+  ProberHealth,
+  ProberHealthKey,
 } from "./prober";
 export {
   PROBER_CHECKS_PATH,
@@ -100,6 +102,10 @@ export {
   PROBER_VERSION_HEADER,
   PROBER_STATE_HEADER,
   PROBER_STATES,
+  PROBER_HEALTH_HEADER,
+  PROBER_HEALTH_KEYS,
+  formatProberHealth,
+  parseProberHealth,
   PROBER_ABSTAIN_REASONS,
   PROBER_CHECKS_VERSION_HEADER,
   PROBER_RESULTS_MAX_BATCH,

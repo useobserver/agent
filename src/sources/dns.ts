@@ -28,23 +28,49 @@ function flattenRecords(records: unknown): string[] {
   });
 }
 
+// Resolvers are reused, keyed by (server, timeout). A new
+// dns.promises.Resolver per lookup leaked about 8 KB each on Bun 1.3.6, so a
+// DNS check every minute grew the agent by about 11 MB a day. Entries are
+// rebuilt after RESOLVER_TTL_MS so a resolver on the system servers picks
+// up a changed /etc/resolv.conf, and the map is bounded.
+const RESOLVER_TTL_MS = 60 * 60_000;
+const RESOLVER_CACHE_MAX = 64;
+const resolvers = new Map<string, { resolver: dnsModule.promises.Resolver; createdAt: number }>();
+
+function resolverFor(server: string | undefined, timeoutMs: number): dnsModule.promises.Resolver {
+  const key = `${server ?? ""}|${timeoutMs}`;
+  const now = Date.now();
+  const hit = resolvers.get(key);
+  if (hit && now - hit.createdAt < RESOLVER_TTL_MS) return hit.resolver;
+  // tries: 1. With 2, c-ares backs off and retries, so a blackholed
+  // resolver took about 3x timeout_ms. The race in execute() is the hard cap.
+  const resolver = new dnsModule.promises.Resolver({ timeout: timeoutMs, tries: 1 });
+  if (server) resolver.setServers([server]);
+  resolvers.delete(key);
+  resolvers.set(key, { resolver, createdAt: now });
+  while (resolvers.size > RESOLVER_CACHE_MAX) resolvers.delete(resolvers.keys().next().value as string);
+  return resolver;
+}
+
+/** Test hook: forget cached resolvers. */
+export function resetDnsResolversForTests(): void {
+  resolvers.clear();
+}
+
 export async function execute(config: DnsConfig): Promise<ProbeResult> {
   const ts = (): string => new Date().toISOString();
   const recordType: RecordType = config.record_type || "A";
   const timeoutMs = config.timeout_ms ?? 5_000;
 
-  // Always construct a Resolver (never bare dnsModule.promises): it is
-  // the only way to put a hard deadline on the DNS transaction. Without
-  // `timeout` a blackholed resolver hangs the probe on the OS default.
-  // setServers throws synchronously (TypeError) on a malformed resolver
-  // address — guard it so the "sources never throw" contract holds and
-  // the operator gets a typed reason instead of a dispatcher backstop.
+  // Always use a Resolver (never bare dnsModule.promises): it is the only
+  // way to put a hard deadline on the DNS transaction. Without `timeout` a
+  // blackholed resolver hangs the probe on the OS default. setServers throws
+  // synchronously (TypeError) on a malformed resolver address: guard it so
+  // the "sources never throw" contract holds and the operator gets a typed
+  // reason instead of a dispatcher backstop.
   let resolver: dnsModule.promises.Resolver;
   try {
-    // tries: 1. With 2, c-ares backs off and retries, so a blackholed
-    // resolver took about 3x timeout_ms. The race below is the hard cap.
-    resolver = new dnsModule.promises.Resolver({ timeout: timeoutMs, tries: 1 });
-    if (config.resolver) resolver.setServers([config.resolver]);
+    resolver = resolverFor(config.resolver, timeoutMs);
   } catch {
     return { value: null, timestamp: ts(), status_hint: "no_data", reason: "dns_resolver_invalid" };
   }
@@ -55,12 +81,10 @@ export async function execute(config: DnsConfig): Promise<ProbeResult> {
     const records = await Promise.race([
       resolver.resolve(config.domain, recordType),
       new Promise<never>((_, reject) => {
+        // No resolver.cancel(): the resolver is shared, and cancel() would
+        // fail every other check's lookup in flight on it. The abandoned
+        // query ends on its own c-ares timeout.
         deadline = setTimeout(() => {
-          try {
-            resolver.cancel();
-          } catch {
-            /* nothing in flight */
-          }
           reject(Object.assign(new Error("dns timeout"), { code: "ETIMEOUT" }));
         }, timeoutMs + 250);
       }),

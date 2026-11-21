@@ -113,29 +113,32 @@ async function readCapped(res: Response, cap: number): Promise<{ text: string; b
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      bytes += value.byteLength;
-      if (bytes > cap) {
+      if (bytes + value.byteLength > cap) {
+        // Keep the part of the chunk that fits: most pages arrive in chunks
+        // larger than the preview cap, and dropping the whole chunk read
+        // every body_match check on them as a mismatch.
+        text += decoder.decode(value.subarray(0, cap - bytes), { stream: true });
+        bytes = cap;
         truncated = true;
         break;
       }
+      bytes += value.byteLength;
       text += decoder.decode(value, { stream: true });
     }
   } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      /* ignore */
-    }
+    // Not awaited: a cancel that never settles must not hold the check.
+    void Promise.resolve()
+      .then(() => reader.cancel())
+      .catch(() => {});
   }
   return { text, bytes, truncated };
 }
 
-async function discard(res: Response): Promise<void> {
-  try {
-    await res.body?.cancel();
-  } catch {
-    /* ignore */
-  }
+function discard(res: Response): void {
+  // Not awaited, for the same reason as in readCapped.
+  void Promise.resolve()
+    .then(() => res.body?.cancel())
+    .catch(() => {});
 }
 
 export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<ProbeResult> {
@@ -153,7 +156,9 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
   }
   const userHeaders: Record<string, string> = {};
   for (const [k, v] of Object.entries(config.headers ?? {})) {
-    if (!isForbiddenProberHeader(k)) userHeaders[k] = String(v);
+    // The User-Agent names the prober and links to the page that explains
+    // its traffic; target owners rely on it, so a tenant cannot replace it.
+    if (!isForbiddenProberHeader(k) && k.trim().toLowerCase() !== "user-agent") userHeaders[k] = String(v);
   }
   const origin0 = url.origin;
 
@@ -186,9 +191,13 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
 
       res = await fetch(pinned.toString(), {
         method,
-        headers: { "user-agent": deps.userAgent, ...headers, host: url.host },
+        headers: { ...headers, "user-agent": deps.userAgent, host: url.host },
         signal: controller.signal,
         redirect: "manual",
+        // A fresh connection per check: no TLS session or socket shared
+        // between tenants' checks of the same IP, the same handshake cost
+        // in every measurement, and no idle sockets held to every target.
+        keepalive: false,
         tls: {
           ...(serverName ? { serverName } : {}),
           rejectUnauthorized: verifyTls,
@@ -203,7 +212,7 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
       if (!followRedirects || res.status < 300 || res.status >= 400 || hop >= OUTSIDE_IN_MAX_REDIRECTS) break;
       const loc = res.headers.get("location");
       if (!loc) break;
-      await discard(res);
+      discard(res);
       let next: URL;
       try {
         next = new URL(loc, url);
@@ -216,19 +225,26 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
     }
     const elapsed = Date.now() - start;
     if (!res) return noData("http_error");
+    // The abort should have fired at timeoutMs. A longer time means this
+    // process ran late (a starved event loop): the number measures the
+    // prober, not the target, so it is never reported as a value.
+    if (elapsed > timeoutMs) {
+      discard(res);
+      return noData("ETIMEDOUT");
+    }
 
     // Before the status check: a challenge usually answers 403, which would
-    // otherwise read as the target failing.
+    // otherwise read as the target failing. The body is read once, directly
+    // (no clone): either way only a reason is returned after this.
     if (CHALLENGE_STATUSES.has(res.status) && !expected.includes(res.status)) {
-      const challenged = await isBotChallenge(res.clone());
-      if (challenged) {
-        await discard(res);
-        return noData(BOT_CHALLENGE_REASON, { status: res.status });
-      }
+      const challenged = await isBotChallenge(res);
+      discard(res);
+      if (challenged) return noData(BOT_CHALLENGE_REASON, { status: res.status });
+      return noData(`unexpected_status:${res.status}`, { status: res.status });
     }
 
     if (!expected.includes(res.status)) {
-      await discard(res);
+      discard(res);
       return noData(`unexpected_status:${res.status}`, { status: res.status });
     }
 
@@ -246,7 +262,7 @@ export async function proberHttp(config: HttpConfig, deps: ProberDeps): Promise<
       const body = await readCapped(res, BODY_PREVIEW_BYTES);
       if (!body.text.includes(config.body_match)) return noData("body_mismatch", { status: res.status });
     } else {
-      await discard(res);
+      discard(res);
     }
     return { value: elapsed, timestamp: now(), metadata: { status: res.status } };
   } catch (err) {

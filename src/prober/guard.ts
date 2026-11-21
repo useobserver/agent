@@ -14,6 +14,7 @@
 
 import dnsModule from "node:dns";
 import { checkTargetHost, classifyIp } from "@observer/probe-config";
+import { withDeadline } from "../deadline.ts";
 
 export const DEFAULT_PROBER_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"];
 const DNS_TIMEOUT_MS = 3_000;
@@ -39,13 +40,34 @@ export function parseDnsServers(raw: string | undefined): string[] {
   return out.length > 0 ? out : [...DEFAULT_PROBER_DNS_SERVERS];
 }
 
+// c-ares gives up after tries × timeout; the deadline is the backstop for a
+// lookup that never settles at all.
+export const DNS_DEADLINE_MS = DNS_TIMEOUT_MS * 2 + 1_000;
+// c-ares answers that describe the NAME (no such domain, no record of this
+// type), as opposed to the resolver failing.
+const NAME_ANSWER_CODES = new Set(["ENOTFOUND", "ENODATA", "ENONAME", "NXDOMAIN"]);
+
 export function createResolver(servers: string[]): ResolveFn {
+  // ONE resolver for the prober's lifetime. A new dns.promises.Resolver per
+  // lookup leaked about 8 KB each on Bun 1.3.6: a prober reached its 512 MB
+  // memory limit after two weeks, then thrashed until its timers fired
+  // minutes late.
+  const r = new dnsModule.promises.Resolver({ timeout: DNS_TIMEOUT_MS, tries: 2 });
+  r.setServers(servers);
   return async (name: string) => {
-    const r = new dnsModule.promises.Resolver({ timeout: DNS_TIMEOUT_MS, tries: 2 });
-    r.setServers(servers);
     // Trailing dot: absolute name, no search-domain expansion.
     const fq = name.endsWith(".") ? name : `${name}.`;
-    const [a, aaaa] = await Promise.allSettled([r.resolve4(fq), r.resolve6(fq)]);
+    const [a, aaaa] = await Promise.allSettled([
+      withDeadline(r.resolve4(fq), DNS_DEADLINE_MS, "dns A lookup"),
+      withDeadline(r.resolve6(fq), DNS_DEADLINE_MS, "dns AAAA lookup"),
+    ]);
+    // Both lookups failed, and not with "this name has no such record": the
+    // resolver itself is failing (timeout, refused, SERVFAIL). Throw, so the
+    // check reads dns_failed instead of dns_no_answer, which blames the target.
+    if (a.status === "rejected" && aaaa.status === "rejected") {
+      const codes = [a.reason, aaaa.reason].map((e) => String((e as { code?: unknown } | null)?.code ?? ""));
+      if (!codes.every((c) => NAME_ANSWER_CODES.has(c))) throw new Error("dns resolver failed");
+    }
     return {
       v4: a.status === "fulfilled" ? a.value : [],
       v6: aaaa.status === "fulfilled" ? aaaa.value : [],
