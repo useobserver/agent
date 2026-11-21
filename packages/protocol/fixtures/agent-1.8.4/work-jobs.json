@@ -1,0 +1,10 @@
+{
+  "method": "GET",
+  "path": "/api/agent/work/jobs",
+  "query": {
+    "kinds": "cloudwatch_list_metrics,probe_test"
+  },
+  "has_agent_key": true,
+  "content_type": "application/json",
+  "body": null
+}
